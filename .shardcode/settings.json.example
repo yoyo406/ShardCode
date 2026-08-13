@@ -1,0 +1,22 @@
+{
+  "rules": [
+    {
+      "tool": "run_shell",
+      "command": "pnpm test",
+      "decision": "allow",
+      "reason": "The project test command is safe to run automatically."
+    },
+    {
+      "tool": "run_shell",
+      "command": "pnpm lint",
+      "decision": "allow",
+      "reason": "The project lint command is safe to run automatically."
+    },
+    {
+      "tool": "write_file",
+      "path": "src/*",
+      "decision": "ask",
+      "reason": "Review source edits interactively."
+    }
+  ]
+}

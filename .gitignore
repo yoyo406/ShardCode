@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.shardcode/settings.local.json
+.shardcode/sessions/
+.shardcode/*.jsonl
+.worktrees/
