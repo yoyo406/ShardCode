@@ -57,8 +57,10 @@ explicitly marks the process as running inside an isolated environment.
 
 Worktrees isolate filesystem state between future parallel subtasks. They do
 not count as execution sandboxes. Arbitrary shell execution therefore passes
-through the `SandboxRunner` boundary and must fail closed when a configured
-process sandbox is unavailable.
+through the `SandboxRunner` boundary and fails closed when no sandbox is
+configured. The default process runner is not marked isolated; the
+`--isolated-environment` flag only asserts that the caller has already provided
+OS/container isolation.
 
 ## Context and memory
 
@@ -67,16 +69,18 @@ V1 uses agentic repository search only: `glob`, `grep`, `read_file` and
 embedding index, vector database or LSP dependency. The context engine accepts
 a tool invoker rather than importing providers or touching the filesystem.
 
-Session memory is the serialized session and event log. Project memory is
-`SHARDCODE.md` and user memory is an explicit, separately scoped store. Every
-memory entry carries source, timestamp and scope.
+Session memory is the serialized session and event log. Project guidance is
+`SHARDCODE.md`, supplemented by the scoped JSON memory store; user memory is
+an explicit, separately scoped store. Every memory entry carries source,
+timestamp and scope.
 
 ## Completion, budgets and errors
 
 The task is complete only when the model emits an explicit validation marker
-and the relevant project checks it ran have passed. Tool failures, denied
-permissions and validation failures are observations, not implicit retries.
-Token, tool-call and wall-clock budgets are enforced by the runtime. Repeated
+and at least one recognized project validation command has passed. Tool
+failures, denied permissions and validation failures are observations, not
+implicit retries. Token, tool-call and cumulative wall-clock budgets are
+persisted and enforced by the runtime. Repeated
 equivalent failing observations trigger a `ThrashingDetected` event and abort
 the task cleanly.
 

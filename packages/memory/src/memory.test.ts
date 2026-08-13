@@ -31,4 +31,13 @@ describe("scoped memory", () => {
     await expect(store.list("session")).resolves.toEqual([]);
     await expect(store.list("project")).resolves.toHaveLength(1);
   });
+
+  it("reads project guidance from SHARDCODE.md storage", async () => {
+    const state = new InMemoryStorage();
+    const project = new InMemoryStorage();
+    await project.write("SHARDCODE.md", "Use the repository validation commands.");
+    const store = new MemoryStore(state, project);
+
+    await expect(store.readProjectGuidance()).resolves.toBe("Use the repository validation commands.");
+  });
 });

@@ -23,7 +23,8 @@ node packages/cli/dist/index.js run "Inspect the repository"
 
 The CLI defaults to permission mode `ask`. Read-only exploration is allowed;
 workspace edits and shell commands are shown for approval. `acceptEdits` allows
-workspace edits while still asking before shell execution:
+workspace edits while still asking before shell execution; shell execution also
+requires a configured sandbox and fails closed when none is available:
 
 ```bash
 pnpm shardcode run "Fix the failing tests" --permission-mode acceptEdits
@@ -51,9 +52,15 @@ by the runtime.
 For a no-network smoke run, use the deterministic provider:
 
 ```bash
+pnpm build
 pnpm shardcode run "Run the local smoke check" \
-  --provider scripted --permission-mode acceptEdits
+  --provider scripted --permission-mode bypass --isolated-environment
 ```
+
+The isolated-environment flag is an assertion that the process is already
+inside a container or OS sandbox; it does not create that isolation. When a
+command is launched through pnpm, the repository root is taken from pnpm's
+invocation directory. Set `SHARDCODE_WORKSPACE_ROOT` to override it explicitly.
 
 ## Permissions and settings
 
@@ -81,8 +88,12 @@ pnpm shardcode run "..." --json
 
 Session state and JSONL events are stored under `.shardcode/sessions/`. A task
 is completed only when the model emits `SHARDCODE_VALIDATED: ...` after at
-least one successful validation command. Budget exhaustion and repeated
-equivalent failures stop the session cleanly with resumable state.
+least one successful recognized validation command such as `pnpm test`,
+`pnpm build` or `pnpm lint`. Budget exhaustion and repeated equivalent
+failures stop the session cleanly with resumable state.
+
+Optional project guidance can be stored in `SHARDCODE.md`; it is loaded as
+untrusted project data alongside scoped JSON memory.
 
 ## Development
 

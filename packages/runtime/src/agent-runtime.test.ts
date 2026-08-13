@@ -196,4 +196,29 @@ describe("agent runtime", () => {
 
     expect(resumed.status).toBe("completed");
   });
+
+  it("does not accept an unrelated successful shell command as validation", async () => {
+    const model = new ScriptedModel([
+      response("Running an unrelated command.", [shellCall("call-1", "echo ok")]),
+      response("SHARDCODE_VALIDATED: premature"),
+      response("Running the real check.", [shellCall("call-2", "pnpm test")]),
+      response("SHARDCODE_VALIDATED: tests passed")
+    ]);
+    const tools = new ScriptedTools([
+      toolResult("call-1", "completed", "ok"),
+      toolResult("call-2", "completed", "33 tests passed")
+    ]);
+    const runtime = new AgentRuntime({
+      provider: model,
+      tools,
+      sessionStore: new InMemorySessionStore(),
+      workspaceRoot: "/repo",
+      budget: { maxTokens: 100, maxToolCalls: 4, maxWallClockSeconds: 60 }
+    });
+
+    const session = await runtime.run("Validate the change");
+
+    expect(session.status).toBe("completed");
+    expect(session.rootTask.validation?.passedCommands).toEqual(["pnpm test"]);
+  });
 });
