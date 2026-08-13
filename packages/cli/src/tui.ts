@@ -199,8 +199,61 @@ export async function runInteractiveTui(options: InteractiveTuiOptions): Promise
 export function createDefaultTuiTerminal(): TuiTerminal {
   const isTTY = Boolean(stdin.isTTY && stdout.isTTY);
   const lines: string[] = [];
+  const queuedInput: string[] = [];
+  const waitingQuestions: Array<{
+    resolve(value: string): void;
+    reject(error: Error): void;
+  }> = [];
+  let inputReader: ReturnType<typeof createInterface> | undefined;
+  let inputClosed = false;
   let workspaceRoot = "";
   let status: TuiStatus = "waiting";
+
+  function inputClosedError(message = "Interactive input closed"): Error {
+    const error = new Error(message);
+    error.name = "AbortError";
+    return error;
+  }
+
+  function rejectWaitingQuestions(error: Error): void {
+    while (waitingQuestions.length > 0) waitingQuestions.shift()?.reject(error);
+  }
+
+  function receiveLine(line: string): void {
+    const waiting = waitingQuestions.shift();
+    if (waiting) {
+      waiting.resolve(line);
+    } else {
+      queuedInput.push(line);
+    }
+  }
+
+  function openInputReader(): void {
+    inputClosed = false;
+    queuedInput.length = 0;
+    inputReader = createInterface({ input: stdin, output: stdout });
+    inputReader.on("line", receiveLine);
+    inputReader.on("SIGINT", () => {
+      inputClosed = true;
+      rejectWaitingQuestions(inputClosedError("Interactive input interrupted"));
+      inputReader?.close();
+    });
+    inputReader.on("close", () => {
+      inputClosed = true;
+      rejectWaitingQuestions(inputClosedError());
+    });
+  }
+
+  function askInput(prompt: string): Promise<string> {
+    if (!inputReader) return Promise.reject(inputClosedError());
+    stdout.write(sanitizeTerminalText(prompt));
+    const queued = queuedInput.shift();
+    if (queued !== undefined) return Promise.resolve(queued);
+    if (inputClosed) return Promise.reject(inputClosedError());
+    return new Promise<string>((resolve, reject) => {
+      waitingQuestions.push({ resolve, reject });
+    });
+  }
 
   function appendLine(prefix: string, value: string): void {
     const sanitized = sanitizeTerminalText(value);
@@ -228,26 +281,18 @@ export function createDefaultTuiTerminal(): TuiTerminal {
     stdout.write(`${content}\n`);
   }
 
-  async function withPrompt<T>(callback: (terminal: ReturnType<typeof createInterface>) => Promise<T>): Promise<T> {
-    const terminal = createInterface({ input: stdin, output: stdout });
-    try {
-      return await callback(terminal);
-    } finally {
-      terminal.close();
-    }
-  }
-
   return {
     isTTY,
     open: (root) => {
       workspaceRoot = root;
       lines.length = 0;
       status = "waiting";
+      openInputReader();
       redraw();
     },
-    question: (prompt) => withPrompt((terminal) => terminal.question(sanitizeTerminalText(prompt))),
+    question: (prompt) => askInput(prompt),
     confirm: async (question) => {
-      const answer = await withPrompt((terminal) => terminal.question(`${sanitizeTerminalText(question)} [y/N] `));
+      const answer = await askInput(`${sanitizeTerminalText(question)} [y/N] `);
       return ["y", "yes", "o", "oui"].includes(answer.trim().toLowerCase());
     },
     write: (line) => appendLine("", line),
@@ -264,6 +309,12 @@ export function createDefaultTuiTerminal(): TuiTerminal {
       status = statusFromExitCode(exitCode);
       redraw();
     },
-    close: () => undefined
+    close: () => {
+      inputClosed = true;
+      rejectWaitingQuestions(inputClosedError());
+      inputReader?.close();
+      inputReader = undefined;
+      queuedInput.length = 0;
+    }
   };
 }
