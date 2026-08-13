@@ -114,12 +114,14 @@ describe("normalized providers", () => {
   });
 
   it("normalizes Gemini function calls", async () => {
+    let captured: { url: string; headers: Headers } | undefined;
     const provider = createProvider({
       provider: "gemini",
       model: request.model,
       apiKey: "test-key",
-      fetch: async () =>
-        jsonResponse({
+      fetch: async (input, init) => {
+        captured = { url: String(input), headers: new Headers(init?.headers) };
+        return jsonResponse({
           candidates: [
             {
               content: {
@@ -132,11 +134,14 @@ describe("normalized providers", () => {
             }
           ],
           usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 7, totalTokenCount: 12 }
-        })
+        });
+      }
     });
 
     const response = await provider.complete(request);
 
+    expect(captured?.url).not.toContain("test-key");
+    expect(captured?.headers.get("x-goog-api-key")).toBe("test-key");
     expect(response.message.content).toBe("I will read it.");
     expect(response.toolCalls[0]).toMatchObject({ name: "read_file", arguments: { path: "README.md" } });
     expect(response.usage?.totalTokens).toBe(12);

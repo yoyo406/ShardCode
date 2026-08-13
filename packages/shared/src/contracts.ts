@@ -209,11 +209,63 @@ export interface Session {
   finalMessage?: string;
 }
 
+export type ProviderId =
+  | "openai"
+  | "openai-codex"
+  | "google-gemini"
+  | "mistral"
+  | "anthropic-claude"
+  | "opencode-zen"
+  | "opencode-go"
+  | "cline"
+  | "kilo-code"
+  | "anthropic"
+  | "gemini"
+  | "scripted";
+
+export type ProviderProtocol =
+  | "openai-chat"
+  | "openai-responses"
+  | "gemini"
+  | "anthropic"
+  | "mistral"
+  | "gateway";
+
+export interface AvailableModel {
+  id: string;
+  label: string;
+  providerId: ProviderId;
+  protocol: ProviderProtocol;
+  baseUrl?: string;
+  capabilities?: {
+    toolCalling?: boolean;
+    reasoning?: boolean;
+    vision?: boolean;
+  };
+}
+
+export interface StoredProviderConnection {
+  providerId: ProviderId;
+  apiKey: string;
+  modelId: string;
+  protocol: ProviderProtocol;
+  baseUrl?: string;
+  verification: "verified" | "unverified";
+  updatedAt: string;
+}
+
+export interface ProviderConfigFile {
+  activeProviderId?: ProviderId;
+  connections: StoredProviderConnection[];
+}
+
 export interface ProviderConfig {
-  provider: "openai" | "anthropic" | "gemini" | "scripted";
+  provider: ProviderId;
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  protocol?: ProviderProtocol;
+  verification?: "verified" | "unverified";
   fetch?: typeof globalThis.fetch;
 }
 

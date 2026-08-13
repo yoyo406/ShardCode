@@ -27,6 +27,15 @@ describe("interactive slash commands", () => {
     });
   });
 
+  it("parses /connect as a local provider setup command", () => {
+    expect(parseInteractiveInput("/connect")).toEqual({
+      kind: "command",
+      command: { name: "connect" }
+    });
+    expect(parseInteractiveInput("/connect extra")).toMatchObject({ kind: "invalid" });
+    expect(formatSlashHelp("connect")).toContain("/connect");
+  });
+
   it("rejects empty input, unknown commands, bad arguments, and unsafe ids", () => {
     expect(parseInteractiveInput(" ")).toEqual({
       kind: "invalid",

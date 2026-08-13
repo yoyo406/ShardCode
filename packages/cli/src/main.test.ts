@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { JsonSessionStore } from "@shardcode/runtime";
 import { FileStorage } from "@shardcode/tool-runtime";
 import { runCli, type CliIO } from "./main.js";
 import type { TuiTerminal } from "./tui.js";
 
-function io(overrides: Partial<Pick<CliIO, "cwd" | "env">> = {}): CliIO & { output: string[]; errors: string[] } {
+function io(overrides: Partial<Pick<CliIO, "cwd" | "env" | "fetch">> = {}): CliIO & { output: string[]; errors: string[] } {
   const value = {
     output: [] as string[],
     errors: [] as string[],
@@ -14,6 +16,7 @@ function io(overrides: Partial<Pick<CliIO, "cwd" | "env">> = {}): CliIO & { outp
     ask: async () => true,
     cwd: overrides.cwd ?? process.cwd(),
     env: overrides.env ?? {}
+    , ...(overrides.fetch ? { fetch: overrides.fetch } : {})
   };
   return value;
 }
@@ -45,6 +48,11 @@ function tuiTerminal(answers: string[]): TuiTerminal & {
     open: () => undefined,
     question: async () => answers.shift() ?? "/exit",
     confirm: async () => true,
+    select: async (_title, options) => {
+      const index = Number(answers.shift());
+      return Number.isInteger(index) && index >= 0 && index < options.length ? index : undefined;
+    },
+    secret: async () => answers.shift(),
     write: (line) => { state.output.push(line); },
     error: (line) => { state.errors.push(line); },
     clear: () => { state.clearCount += 1; },
@@ -125,5 +133,44 @@ describe("CLI lifecycle", () => {
     expect(terminal.output.some((line) => line.includes("Permission mode: acceptEdits"))).toBe(true);
     expect(terminal.output.some((line) => line.includes("/status"))).toBe(true);
     expect(terminal.finished).toEqual([0]);
+  });
+
+  it("connects a provider, discovers its models, and uses the stored connection", async () => {
+    const configHome = await mkdtemp(join(tmpdir(), "shardcode-connect-test-"));
+    const testIo = io({
+      env: { SHARDCODE_CONFIG_HOME: configHome },
+      fetch: async (_input, init) => {
+        if (init?.method === "GET") {
+          return new Response(JSON.stringify({ data: [{ id: "gpt-5.4", display_name: "GPT-5.4" }] }), { status: 200 });
+        }
+        const body = JSON.parse(String(init?.body)) as { messages?: Array<{ role?: string }> };
+        const hasToolResult = body.messages?.some((message) => message.role === "tool");
+        return new Response(JSON.stringify(hasToolResult
+          ? { choices: [{ message: { role: "assistant", content: "SHARDCODE_VALIDATED: connected task complete" }, finish_reason: "stop" }] }
+          : {
+              choices: [{
+                message: {
+                  role: "assistant",
+                  content: "Running validation.",
+                  tool_calls: [{ id: "validation-call", type: "function", function: { name: "run_shell", arguments: '{"command":"node --check packages/cli/dist/index.js"}' } }]
+                },
+                finish_reason: "tool_calls"
+              }]
+            }), { status: 200 });
+      }
+    });
+    const terminal = tuiTerminal(["/connect", "0", "test-key", "0", "Run connected task", "/exit"]);
+    testIo.tui = terminal;
+
+    try {
+      const exitCode = await runCli(["--permission-mode", "bypass", "--isolated-environment"], testIo);
+
+      expect(exitCode).toBe(0);
+      expect(terminal.output.some((line) => line.includes("Connected: OpenAI / GPT-5.4"))).toBe(true);
+      expect(terminal.output.some((line) => line.includes("connected task complete"))).toBe(true);
+      expect(terminal.output.join("\n")).not.toContain("test-key");
+    } finally {
+      await rm(configHome, { recursive: true, force: true });
+    }
   });
 });

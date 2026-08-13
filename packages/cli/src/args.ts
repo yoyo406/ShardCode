@@ -1,5 +1,7 @@
+import type { ProviderId } from "@shardcode/shared";
+
 export type CliCommand = "interactive" | "run" | "resume" | "help";
-export type CliProvider = "openai" | "anthropic" | "gemini" | "scripted";
+export type CliProvider = ProviderId;
 export type CliPermissionMode = "ask" | "acceptEdits" | "bypass";
 
 export interface CliOptions {
@@ -26,6 +28,21 @@ const DEFAULTS = {
   maxToolCalls: 100,
   maxWallClockSeconds: 1_800
 };
+
+const SUPPORTED_PROVIDERS: readonly CliProvider[] = [
+  "openai",
+  "openai-codex",
+  "google-gemini",
+  "mistral",
+  "anthropic-claude",
+  "opencode-zen",
+  "opencode-go",
+  "cline",
+  "kilo-code",
+  "anthropic",
+  "gemini",
+  "scripted"
+];
 
 function numberOption(name: string, value: string | undefined): number {
   if (value === undefined || value.length === 0) throw new Error(`${name} requires a value`);
@@ -85,7 +102,7 @@ export function parseArgs(argv: string[]): CliOptions {
     switch (argument) {
       case "--provider": {
         const [value, next] = nextValue(argv, index, argument);
-        if (!(["openai", "anthropic", "gemini", "scripted"] as string[]).includes(value)) throw new Error(`unsupported provider: ${value}`);
+        if (!(SUPPORTED_PROVIDERS as readonly string[]).includes(value)) throw new Error(`unsupported provider: ${value}`);
         provider = value as CliProvider;
         providerExplicit = true;
         index = next;
@@ -178,7 +195,7 @@ Usage:
   shardcode resume <session-id> [options]
 
 Options:
-  --provider openai|anthropic|gemini|scripted
+  --provider openai|openai-codex|google-gemini|mistral|anthropic-claude|opencode-zen|opencode-go|cline|kilo-code|scripted
   --model <model>
   --permission-mode ask|acceptEdits|bypass
   --max-tokens <number>

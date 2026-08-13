@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type {
   ModelRequest,
   ModelResponse,
+  AvailableModel,
+  ProviderConfig,
+  StoredProviderConnection,
   Session,
   ToolCall,
   ToolResult
@@ -65,5 +68,34 @@ describe("shared contracts", () => {
     expect(JSON.parse(JSON.stringify({ request, response, session }))).toEqual(
       expect.objectContaining({ request, response, session })
     );
+  });
+
+  it("accepts all connect provider identities and normalized model metadata", () => {
+    const config: ProviderConfig = {
+      provider: "opencode-go",
+      model: "anthropic/claude-sonnet-4-6",
+      apiKey: "test-key",
+      protocol: "gateway",
+      verification: "unverified"
+    };
+    const model: AvailableModel = {
+      id: "anthropic/claude-sonnet-4-6",
+      label: "Claude Sonnet 4.6",
+      providerId: "opencode-go",
+      protocol: "gateway",
+      baseUrl: "https://opencode.ai/zen/go/v1/chat/completions",
+      capabilities: { toolCalling: true }
+    };
+    const connection: StoredProviderConnection = {
+      providerId: model.providerId,
+      apiKey: config.apiKey ?? "",
+      modelId: model.id,
+      protocol: model.protocol,
+      ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
+      verification: config.verification ?? "unverified",
+      updatedAt: "2026-08-13T00:00:00.000Z"
+    };
+
+    expect(connection).toMatchObject({ providerId: "opencode-go", modelId: model.id });
   });
 });
