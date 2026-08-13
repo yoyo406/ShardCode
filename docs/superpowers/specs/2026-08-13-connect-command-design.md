@@ -67,6 +67,7 @@ interface AvailableModel {
   label: string;
   providerId: string;
   protocol: "openai-chat" | "openai-responses" | "gemini" | "anthropic" | "mistral" | "gateway";
+  baseUrl?: string;
   capabilities?: {
     toolCalling?: boolean;
     reasoning?: boolean;
@@ -100,12 +101,19 @@ interface StoredProviderConnection {
   providerId: string;
   apiKey: string;
   modelId: string;
+  protocol: AvailableModel["protocol"];
+  baseUrl?: string;
   verification: "verified" | "unverified";
   updatedAt: string;
 }
+
+interface ProviderConfigFile {
+  activeProviderId?: string;
+  connections: StoredProviderConnection[];
+}
 ```
 
-The key is never included in `Session`, `ProviderConfig` event payloads, rendered status output, thrown error messages, or debug logs. Configuration writes are atomic: write a temporary file with restrictive permissions, rename it into place, and keep the old file if serialization or persistence fails.
+The key is never included in `Session`, `ProviderConfig` event payloads, rendered status output, thrown error messages, or debug logs. Configuration writes are atomic: write a temporary file with restrictive permissions, rename it into place, and keep the old file if serialization or persistence fails. Saving a connection updates the matching entry and `activeProviderId` together, so the provider selected by `/connect` becomes active without deleting other saved connections.
 
 ## TUI and slash boundaries
 
