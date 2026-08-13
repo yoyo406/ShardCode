@@ -26,9 +26,19 @@ subprocess or Git operations directly.
 The public commands are:
 
 ```text
+shard                                  # interactive TUI
+shardcode                              # interactive TUI alias
+shard "task description"               # direct task shorthand
 shardcode run "task description"
 shardcode resume <session-id>
 ```
+
+Interactive mode keeps one terminal session open after each task. `/help`,
+`/clear`, `/status`, `/model`, `/permissions`, `/resume <session-id>`,
+`/exit`, and `/quit` are local CLI commands; they are parsed before a model
+request and are never included in model messages. Task and resume requests
+continue through the same runtime, permission engine, session store, and
+sandbox path as the explicit commands.
 
 The runtime maintains the state hierarchy `Session -> Task -> Subtask ->
 Attempt -> ToolExecution`, persists the session under `.shardcode/sessions/`,

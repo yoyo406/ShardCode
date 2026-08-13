@@ -13,7 +13,7 @@ import type {
 import { FileStorage } from "./storage.js";
 import { PermissionEngine } from "./permissions.js";
 import { ensureParent, globWorkspace, grepWorkspace, inputRecord, listWorkspaceFiles, requiredString, stringValue, TOOL_DEFINITIONS } from "./tools.js";
-import { quoteShell, resolveWorkspacePath } from "./paths.js";
+import { assertWorkspacePath, quoteShell, resolveWorkspacePath } from "./paths.js";
 
 export interface ToolRuntimeOptions {
   workspaceRoot: string;
@@ -82,6 +82,13 @@ export class ToolRuntime implements ToolInvoker {
     if (decision.level === "ask") {
       const approved = this.ask ? await this.ask(request, decision) : false;
       if (!approved) return this.denied(call, { ...decision, reason: `${decision.reason}; approval was not granted` });
+    }
+    if (pathValue !== undefined) {
+      try {
+        await assertWorkspacePath(this.workspaceRoot, pathValue);
+      } catch (error) {
+        return this.failed(call, "PATH_SECURITY", error instanceof Error ? error.message : String(error));
+      }
     }
     try {
       return await this.run(call, input);

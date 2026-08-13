@@ -1,4 +1,4 @@
-import type { PermissionDecision, PermissionRequest, ProviderConfig, ShardCodeEvent } from "@shardcode/shared";
+import type { PermissionDecision, PermissionRequest, ProviderConfig, Session, ShardCodeEvent } from "@shardcode/shared";
 import { resolve } from "node:path";
 import { ContextEngine } from "@shardcode/context-engine";
 import { MemoryStore } from "@shardcode/memory";
@@ -8,11 +8,20 @@ import { FileStorage, ToolRuntime } from "@shardcode/tool-runtime";
 import { parseArgs, HELP_TEXT, type CliOptions, type CliProvider } from "./args.js";
 import { askForPermission } from "./prompts.js";
 import { renderEvent } from "./render.js";
+import {
+  createDefaultTuiTerminal,
+  runInteractiveTui,
+  type InteractiveTaskRequest,
+  type TuiExecutionResult,
+  type TuiSessionSnapshot,
+  type TuiTerminal
+} from "./tui.js";
 
 export interface CliIO {
   write(line: string): void;
   error(line: string): void;
   ask?(question: string, request?: PermissionRequest, decision?: PermissionDecision): Promise<boolean>;
+  tui?: TuiTerminal;
   cwd: string;
   env: Record<string, string | undefined>;
 }
@@ -22,6 +31,7 @@ function defaultIO(): CliIO {
     write: (line) => process.stdout.write(`${line}\n`),
     error: (line) => process.stderr.write(`${line}\n`),
     ask: async (question) => askForPermission(question),
+    tui: createDefaultTuiTerminal(),
     cwd: process.cwd(),
     env: process.env
   };
@@ -75,22 +85,38 @@ function buildProvider(options: CliOptions, env: Record<string, string | undefin
   return createProvider(config);
 }
 
-export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number> {
-  const io = suppliedIO ?? defaultIO();
-  let options: CliOptions;
-  try {
-    options = parseArgs(argv);
-  } catch (error) {
-    io.error(error instanceof Error ? error.message : String(error));
-    return 2;
-  }
-  if (options.command === "help") {
-    io.write(HELP_TEXT);
-    return 0;
-  }
+function workspaceRootFor(io: CliIO): string {
+  return resolve(io.env.SHARDCODE_WORKSPACE_ROOT ?? io.env.INIT_CWD ?? io.cwd);
+}
 
+type TaskCliOptions = CliOptions & { command: "run" | "resume" };
+
+interface TaskExecutionResult {
+  exitCode: number;
+  session?: Session;
+}
+
+function asTaskOptions(options: CliOptions): TaskCliOptions {
+  if (options.command !== "run" && options.command !== "resume") {
+    throw new Error(`Unsupported task command: ${options.command}`);
+  }
+  return options as TaskCliOptions;
+}
+
+function sessionSnapshot(session: Session): TuiSessionSnapshot {
+  return {
+    id: session.id,
+    status: session.status,
+    provider: session.provider,
+    model: session.model,
+    prompt: session.rootTask.prompt,
+    updatedAt: session.updatedAt
+  };
+}
+
+async function executeTask(options: TaskCliOptions, io: CliIO): Promise<TaskExecutionResult> {
   try {
-    const workspaceRoot = resolve(io.env.SHARDCODE_WORKSPACE_ROOT ?? io.env.INIT_CWD ?? io.cwd);
+    const workspaceRoot = workspaceRootFor(io);
     const toolRuntime = await ToolRuntime.create({
       workspaceRoot,
       mode: options.permissionMode,
@@ -133,9 +159,62 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
       ? await runtime.run(options.prompt ?? "")
       : await runtime.resume(options.sessionId ?? "");
     if (!options.json && session.finalMessage) io.write(session.finalMessage);
-    return session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1;
+    return {
+      exitCode: session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1,
+      session
+    };
   } catch (error) {
     io.error(error instanceof Error ? error.message : String(error));
-    return 1;
+    return { exitCode: 1 };
   }
+}
+
+export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number> {
+  const io = suppliedIO ?? defaultIO();
+  let options: CliOptions;
+  try {
+    options = parseArgs(argv);
+  } catch (error) {
+    io.error(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
+  if (options.command === "help") {
+    io.write(HELP_TEXT);
+    return 0;
+  }
+  if (options.command === "interactive") {
+    if (options.json) {
+      io.error("--json cannot be used with interactive mode.");
+      return 2;
+    }
+    const terminal = io.tui ?? createDefaultTuiTerminal();
+    return runInteractiveTui({
+      terminal,
+      workspaceRoot: workspaceRootFor(io),
+      info: {
+        provider: options.provider,
+        model: options.modelExplicit ? options.model : defaultModel(options.provider),
+        permissionMode: options.permissionMode,
+        isolatedEnvironment: options.isolatedEnvironment
+      },
+      execute: async (request: InteractiveTaskRequest, tuiIO): Promise<TuiExecutionResult> => {
+        const taskOptions: TaskCliOptions = request.kind === "run"
+          ? { ...options, command: "run", prompt: request.prompt }
+          : { ...options, command: "resume", sessionId: request.sessionId };
+        const result = await executeTask(
+          taskOptions,
+          { ...io, write: tuiIO.write, error: tuiIO.error, ask: tuiIO.ask }
+        );
+        return {
+          exitCode: result.exitCode,
+          ...(result.session ? { session: sessionSnapshot(result.session) } : {})
+        };
+      }
+    });
+  }
+  if (options.command === "run" || options.command === "resume") {
+    return (await executeTask(asTaskOptions(options), io)).exitCode;
+  }
+  io.error(`Unsupported CLI command: ${options.command}`);
+  return 2;
 }
