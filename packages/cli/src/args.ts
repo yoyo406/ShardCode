@@ -1,4 +1,4 @@
-export type CliCommand = "run" | "resume" | "help";
+export type CliCommand = "interactive" | "run" | "resume" | "help";
 export type CliProvider = "openai" | "anthropic" | "gemini" | "scripted";
 export type CliPermissionMode = "ask" | "acceptEdits" | "bypass";
 
@@ -42,7 +42,7 @@ function nextValue(argv: string[], index: number, option: string): [string, numb
 
 export function parseArgs(argv: string[]): CliOptions {
   const first = argv[0];
-  if (!first || first === "--help" || first === "-h" || first === "help") {
+  if (first === "--help" || first === "-h" || first === "help") {
     return {
       command: "help",
       provider: DEFAULTS.provider,
@@ -57,9 +57,12 @@ export function parseArgs(argv: string[]): CliOptions {
       isolatedEnvironment: false
     };
   }
-  if (first !== "run" && first !== "resume") throw new Error(`unknown command: ${first}`);
 
-  const positional: string[] = [];
+  const explicitCommand = first === "run" || first === "resume";
+  const interactiveCommand = !first || first.startsWith("--");
+  const directPrompt = first && !explicitCommand && !interactiveCommand ? first : undefined;
+
+  const positional: string[] = directPrompt ? [directPrompt] : [];
   let provider: CliProvider = DEFAULTS.provider;
   let providerExplicit = false;
   let model = DEFAULTS.model;
@@ -71,7 +74,8 @@ export function parseArgs(argv: string[]): CliOptions {
   let json = false;
   let isolatedEnvironment = false;
 
-  for (let index = 1; index < argv.length; index += 1) {
+  const optionStart = explicitCommand ? 1 : directPrompt ? 1 : 0;
+  for (let index = optionStart; index < argv.length; index += 1) {
     const argument = argv[index];
     if (!argument) continue;
     if (!argument.startsWith("--")) {
@@ -145,9 +149,9 @@ export function parseArgs(argv: string[]): CliOptions {
     }
   }
 
-  if (first === "run" && positional.length === 0) throw new Error("run requires a task prompt");
-  if (first === "resume" && positional.length === 0) throw new Error("resume requires a session id");
-  const command: "run" | "resume" = first;
+  const command: "interactive" | "run" | "resume" = explicitCommand ? first : directPrompt ? "run" : "interactive";
+  if (command === "run" && positional.length === 0) throw new Error("run requires a task prompt");
+  if (command === "resume" && positional.length === 0) throw new Error("resume requires a session id");
   return {
     command,
     ...(command === "run" ? { prompt: positional.join(" ") } : { sessionId: positional[0]! }),
