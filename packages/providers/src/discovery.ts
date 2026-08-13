@@ -116,6 +116,10 @@ function toAvailableModels(
   const models: AvailableModel[] = [];
   const seen = new Set<string>();
   for (const entry of entries) {
+    if (providerId === "google-gemini") {
+      const supportedMethods = asRecord(entry).supportedGenerationMethods;
+      if (Array.isArray(supportedMethods) && !supportedMethods.includes("generateContent")) continue;
+    }
     const id = modelIdFrom(entry);
     if (!id || seen.has(id) || definition.modelFilter?.(id) === false) continue;
     seen.add(id);

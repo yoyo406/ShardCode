@@ -71,13 +71,12 @@ export function createGeminiProvider(config: ProviderConfig): ModelProvider {
         if (request.temperature !== undefined) generationConfig.temperature = request.temperature;
         body.generationConfig = generationConfig;
       }
-      const separator = endpoint.includes("?") ? "&" : "?";
       const payload = await fetchJson(
         fetcher,
-        `${endpoint}${separator}key=${encodeURIComponent(apiKey)}`,
+        endpoint,
         {
           method: "POST",
-          headers: requestHeaders({}),
+          headers: requestHeaders({ "x-goog-api-key": apiKey }),
           body: JSON.stringify(body)
         },
         "Gemini"

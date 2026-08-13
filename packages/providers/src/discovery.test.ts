@@ -49,8 +49,9 @@ describe("provider model discovery", () => {
         headers = new Headers(init?.headers);
         return jsonResponse({
           models: [
-            { name: "models/gemini-2.5-flash", displayName: "Gemini 2.5 Flash" },
-            { name: "models/gemini-2.5-pro", displayName: "Gemini 2.5 Pro" }
+            { name: "models/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", supportedGenerationMethods: ["generateContent"] },
+            { name: "models/gemini-2.5-pro", displayName: "Gemini 2.5 Pro", supportedGenerationMethods: ["generateContent"] },
+            { name: "models/text-embedding-004", displayName: "Embedding", supportedGenerationMethods: ["embedContent"] }
           ]
         });
       }

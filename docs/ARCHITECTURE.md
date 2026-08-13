@@ -35,8 +35,8 @@ shardcode resume <session-id>
 
 Interactive mode keeps one terminal session open after each task. `/help`,
 `/clear`, `/status`, `/model`, `/permissions`, `/resume <session-id>`,
-`/exit`, and `/quit` are local CLI commands; they are parsed before a model
-request and are never included in model messages. Task and resume requests
+`/connect`, `/exit`, and `/quit` are local CLI commands; they are parsed before
+a model request and are never included in model messages. Task and resume requests
 continue through the same runtime, permission engine, session store, and
 sandbox path as the explicit commands.
 
@@ -95,8 +95,13 @@ equivalent failing observations trigger a `ThrashingDetected` event and abort
 the task cleanly.
 
 Provider adapters normalize tool calls, streaming-independent responses,
-usage and typed provider errors behind `ModelProvider`. V1 ships HTTP adapters
-for OpenAI, Anthropic and Gemini without coupling the runtime to any one SDK.
+usage and typed provider errors behind `ModelProvider`. The provider registry
+supports OpenAI, OpenAI-Codex, Google Gemini, Mistral, Anthropic Claude,
+OpenCode Zen/Go, Cline and Kilo through native, Responses, Anthropic Messages
+and OpenAI-compatible HTTP adapters without coupling the runtime to any SDK.
+Interactive connections are user-scoped and stored outside the workspace with
+owner-only file permissions; the CLI injects the selected connection into the
+runtime at task start.
 
 ## Deliberate V1 exclusions
 

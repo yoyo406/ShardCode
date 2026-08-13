@@ -43,6 +43,7 @@ model:
 | `/model` | Show the active provider and model. |
 | `/permissions` | Show the permission mode and isolation setting. |
 | `/resume <session-id>` | Resume a persisted session. |
+| `/connect` | Add an AI provider, validate/discover models, and choose the active model. |
 | `/exit` or `/quit` | Leave the TUI. |
 
 The prompt stays open after each task, so a typical session can look like:
@@ -77,16 +78,43 @@ access scoped to the task.
 
 ## Providers
 
-The provider adapters are normalized behind one tool-calling contract:
+The provider adapters are normalized behind one tool-calling contract. In the
+interactive TUI, use `/connect` to select a provider, enter its API key in a
+masked prompt, retrieve the available models, and choose the default model.
+The supported providers are:
+
+- OpenAI (`openai`)
+- OpenAI-Codex (`openai-codex`)
+- Google-Gemini (`google-gemini`)
+- Mistral (`mistral`)
+- Anthropic-Claude (`anthropic-claude`)
+- OpenCode ZEN (`opencode-zen`)
+- OpenCode GO (`opencode-go`)
+- Cline (`cline`)
+- Kilo-code (`kilo-code`)
+
+For direct commands, pass a provider and optional model:
 
 ```bash
 pnpm shardcode run "..." --provider openai --model gpt-4o-mini
-pnpm shardcode run "..." --provider anthropic --model claude-3-5-sonnet-20241022
-pnpm shardcode run "..." --provider gemini --model gemini-2.0-flash
+pnpm shardcode run "..." --provider openai-codex --model codex-mini-latest
+pnpm shardcode run "..." --provider google-gemini --model gemini-2.5-flash
+pnpm shardcode run "..." --provider mistral --model mistral-large-latest
+pnpm shardcode run "..." --provider anthropic-claude --model claude-sonnet-4-6
 ```
 
-Credentials are read from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` or
-`GEMINI_API_KEY`. Provider transport failures use bounded retries; a failed
+Direct commands read credentials from the provider-specific environment
+variables (`OPENAI_API_KEY`, `CODEX_API_KEY`, `GEMINI_API_KEY`,
+`MISTRAL_API_KEY`, `ANTHROPIC_API_KEY`, `OPENCODE_API_KEY`, `CLINE_API_KEY`,
+or `KILO_API_KEY`). Connections created with `/connect` are stored outside the
+workspace in the user configuration directory (`~/.config/shardcode` on Linux,
+`~/Library/Application Support/ShardCode` on macOS, or `%APPDATA%/ShardCode` on
+Windows). Set `SHARDCODE_CONFIG_HOME` to override it for automation or tests.
+
+Cline uses its documented bundled model catalog because it does not expose a
+public model-list endpoint. Kilo reads its public model catalog without
+sending the API key; both connections are marked unverified until their first
+real model request. Provider transport failures use bounded retries; a failed
 repository tool is returned to the model as an observation and is not retried
 by the runtime.
 
