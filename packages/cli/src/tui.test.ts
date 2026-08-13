@@ -4,7 +4,9 @@ import {
   type InteractiveTaskRequest,
   type TuiExecutionResult,
   type TuiSessionSnapshot,
-  type TuiTerminal
+  type TuiTerminal,
+  type TuiConnectionOption,
+  type TuiConnectionResult
 } from "./tui.js";
 
 function fakeTerminal(answers: string[], isTTY = true): TuiTerminal & {
@@ -14,7 +16,9 @@ function fakeTerminal(answers: string[], isTTY = true): TuiTerminal & {
   lines: string[];
   errors: string[];
   finished: number[];
-  statuses: string[];
+    statuses: string[];
+  selections: string[];
+  secrets: string[];
   clearCount: number;
   closed: number;
 } {
@@ -26,6 +30,8 @@ function fakeTerminal(answers: string[], isTTY = true): TuiTerminal & {
     errors: [] as string[],
     finished: [] as number[],
     statuses: [] as string[],
+    selections: [] as string[],
+    secrets: [] as string[],
     clearCount: 0,
     closed: 0
   };
@@ -34,6 +40,8 @@ function fakeTerminal(answers: string[], isTTY = true): TuiTerminal & {
     opened: state.opened,
     questions: state.questions,
     confirmations: state.confirmations,
+    selections: state.selections,
+    secrets: state.secrets,
     lines: state.lines,
     errors: state.errors,
     finished: state.finished,
@@ -48,6 +56,17 @@ function fakeTerminal(answers: string[], isTTY = true): TuiTerminal & {
     confirm: async (question: string) => {
       state.confirmations.push(question);
       return true;
+    },
+    select: async (title: string, options: readonly TuiConnectionOption[]) => {
+      state.selections.push(`${title}: ${options.map((option) => option.label).join(", ")}`);
+      const answer = answers.shift();
+      if (answer === undefined) return undefined;
+      const index = Number(answer);
+      return Number.isInteger(index) && index >= 0 && index < options.length ? index : undefined;
+    },
+    secret: async (prompt: string) => {
+      state.secrets.push(prompt);
+      return answers.shift();
     },
     write: (line: string): void => { state.lines.push(line); },
     error: (line: string): void => { state.errors.push(line); },
@@ -117,6 +136,31 @@ describe("interactive TUI", () => {
 
     expect(result).toBe(0);
     expect(requests).toEqual([{ kind: "resume", sessionId: "abc-123" }]);
+  });
+
+  it("opens /connect, keeps the key out of rendering, and updates /model", async () => {
+    const terminal = fakeTerminal(["/connect", "0", "secret-key", "0", "/model", "/exit"]);
+    let connected: TuiConnectionResult | undefined;
+    const result = await runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      connect: async (io) => {
+        const providerIndex = await io.select("Provider", [{ id: "openai", label: "OpenAI" }]);
+        const apiKey = await io.secret("API key: ");
+        const modelIndex = await io.select("Model", [{ id: "gpt-5.4", label: "GPT-5.4" }]);
+        if (providerIndex === undefined || modelIndex === undefined || !apiKey) return undefined;
+        connected = { providerId: "openai", providerLabel: "OpenAI", modelId: "gpt-5.4", modelLabel: "GPT-5.4" };
+        return connected;
+      },
+      execute: async () => ({ exitCode: 0 })
+    });
+
+    expect(result).toBe(0);
+    expect(connected).toMatchObject({ providerId: "openai", modelId: "gpt-5.4" });
+    expect(terminal.secrets).toEqual(["API key: "]);
+    expect(terminal.lines.join("\n")).toContain("Provider: OpenAI\nModel: GPT-5.4");
+    expect(terminal.lines.join("\n")).not.toContain("secret-key");
   });
 
   it("re-prompts empty tasks and forwards execution output and permissions", async () => {

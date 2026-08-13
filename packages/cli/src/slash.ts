@@ -12,6 +12,7 @@ export type SlashCommandName =
   | "model"
   | "permissions"
   | "resume"
+  | "connect"
   | "exit";
 
 export const SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
@@ -21,6 +22,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
   { name: "model", usage: "/model", description: "Show the configured provider and model." },
   { name: "permissions", usage: "/permissions", description: "Show permission and isolation settings." },
   { name: "resume", usage: "/resume <session-id>", description: "Resume a persisted session." },
+  { name: "connect", usage: "/connect", description: "Connect an AI provider and choose its default model." },
   { name: "exit", usage: "/exit", description: "Leave the interactive TUI.", aliases: ["quit"] }
 ] as const;
 
@@ -31,6 +33,7 @@ export type SlashCommand =
   | { name: "model" }
   | { name: "permissions" }
   | { name: "resume"; sessionId: string }
+  | { name: "connect" }
   | { name: "exit" };
 
 export type ParsedInteractiveInput =
@@ -88,6 +91,7 @@ export function parseInteractiveInput(input: string): ParsedInteractiveInput {
     case "status":
     case "model":
     case "permissions":
+    case "connect":
     case "exit":
       return args.length === 0
         ? { kind: "command", command: { name: definition.name } }

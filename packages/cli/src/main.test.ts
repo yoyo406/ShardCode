@@ -45,6 +45,11 @@ function tuiTerminal(answers: string[]): TuiTerminal & {
     open: () => undefined,
     question: async () => answers.shift() ?? "/exit",
     confirm: async () => true,
+    select: async (_title, options) => {
+      const index = Number(answers.shift());
+      return Number.isInteger(index) && index >= 0 && index < options.length ? index : undefined;
+    },
+    secret: async () => answers.shift(),
     write: (line) => { state.output.push(line); },
     error: (line) => { state.errors.push(line); },
     clear: () => { state.clearCount += 1; },

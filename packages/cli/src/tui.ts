@@ -34,11 +34,25 @@ export interface InteractiveRuntimeInfo {
   isolatedEnvironment: boolean;
 }
 
+export interface TuiConnectionOption {
+  id: string;
+  label: string;
+}
+
+export interface TuiConnectionResult {
+  providerId: string;
+  providerLabel: string;
+  modelId: string;
+  modelLabel: string;
+}
+
 export interface TuiTerminal {
   readonly isTTY: boolean;
   open(workspaceRoot: string): void;
   question(prompt: string): Promise<string>;
   confirm(question: string): Promise<boolean>;
+  select(title: string, options: readonly TuiConnectionOption[]): Promise<number | undefined>;
+  secret(prompt: string): Promise<string | undefined>;
   write(line: string): void;
   error(line: string): void;
   clear(): void;
@@ -53,11 +67,19 @@ export interface TuiExecutionIO {
   ask(question: string, request?: PermissionRequest, decision?: PermissionDecision): Promise<boolean>;
 }
 
+export interface TuiConnectionIO {
+  select(title: string, options: readonly TuiConnectionOption[]): Promise<number | undefined>;
+  secret(prompt: string): Promise<string | undefined>;
+  write(line: string): void;
+  error(line: string): void;
+}
+
 export interface InteractiveTuiOptions {
   terminal: TuiTerminal;
   workspaceRoot: string;
   info: InteractiveRuntimeInfo;
   execute(request: InteractiveTaskRequest, io: TuiExecutionIO): Promise<TuiExecutionResult>;
+  connect?(io: TuiConnectionIO): Promise<TuiConnectionResult | undefined>;
 }
 
 function statusFromExitCode(exitCode: number): TuiStatus {
@@ -105,7 +127,8 @@ async function executeRequest(
 function renderLocalCommand(
   command: SlashCommand,
   options: InteractiveTuiOptions,
-  lastSession: TuiSessionSnapshot | undefined
+  lastSession: TuiSessionSnapshot | undefined,
+  info: InteractiveRuntimeInfo
 ): { exit: boolean; lastSession: TuiSessionSnapshot | undefined } {
   switch (command.name) {
     case "help":
@@ -118,14 +141,15 @@ function renderLocalCommand(
       options.terminal.write(renderStatus(lastSession));
       return { exit: false, lastSession };
     case "model":
-      options.terminal.write(`Provider: ${safe(options.info.provider)}\nModel: ${safe(options.info.model)}`);
+      options.terminal.write(`Provider: ${safe(info.provider)}\nModel: ${safe(info.model)}`);
       return { exit: false, lastSession };
     case "permissions":
       options.terminal.write(
-        `Permission mode: ${safe(options.info.permissionMode)}\nIsolated environment: ${options.info.isolatedEnvironment ? "yes" : "no"}`
+        `Permission mode: ${safe(info.permissionMode)}\nIsolated environment: ${info.isolatedEnvironment ? "yes" : "no"}`
       );
       return { exit: false, lastSession };
     case "resume":
+    case "connect":
       return { exit: false, lastSession };
     case "exit":
       return { exit: true, lastSession };
@@ -136,6 +160,7 @@ export async function runInteractiveTui(options: InteractiveTuiOptions): Promise
   let exitCode = 0;
   let opened = false;
   let lastSession: TuiSessionSnapshot | undefined;
+  const activeInfo: InteractiveRuntimeInfo = { ...options.info };
   const io: TuiExecutionIO = {
     write: (line) => options.terminal.write(line),
     error: (line) => options.terminal.error(line),
@@ -172,7 +197,31 @@ export async function runInteractiveTui(options: InteractiveTuiOptions): Promise
           options.terminal.setStatus(statusFromExitCode(result.exitCode));
           continue;
         }
-        renderLocalCommand(parsed.command, options, lastSession);
+        if (parsed.command.name === "connect") {
+          if (!options.connect) {
+            options.terminal.error("Provider connection is unavailable.");
+            continue;
+          }
+          try {
+            const connection = await options.connect({
+              select: (title, choices) => options.terminal.select(title, choices),
+              secret: (prompt) => options.terminal.secret(prompt),
+              write: (line) => options.terminal.write(line),
+              error: (line) => options.terminal.error(line)
+            });
+            if (connection) {
+              activeInfo.provider = connection.providerLabel;
+              activeInfo.model = connection.modelLabel;
+              options.terminal.write(`Connected: ${safe(connection.providerLabel)} / ${safe(connection.modelLabel)}`);
+            } else {
+              options.terminal.write("Provider connection cancelled.");
+            }
+          } catch (error) {
+            options.terminal.error(error instanceof Error ? error.message : String(error));
+          }
+          continue;
+        }
+        renderLocalCommand(parsed.command, options, lastSession, activeInfo);
         continue;
       }
 
@@ -208,6 +257,7 @@ export function createDefaultTuiTerminal(): TuiTerminal {
   let inputClosed = false;
   let workspaceRoot = "";
   let status: TuiStatus = "waiting";
+  let activeSecretCleanup: (() => void) | undefined;
 
   function inputClosedError(message = "Interactive input closed"): Error {
     const error = new Error(message);
@@ -255,6 +305,57 @@ export function createDefaultTuiTerminal(): TuiTerminal {
     });
   }
 
+  function askSecret(prompt: string): Promise<string | undefined> {
+    const queued = queuedInput.shift();
+    if (queued !== undefined) return Promise.resolve(queued);
+    const reader = inputReader;
+    if (!reader || inputClosed) return Promise.resolve(undefined);
+    if (!stdin.isTTY || typeof stdin.setRawMode !== "function") return askInput(prompt);
+
+    return new Promise<string | undefined>((resolve, reject) => {
+      const characters: string[] = [];
+      const cleanup = (): void => {
+        stdin.off("data", onData);
+        stdin.setRawMode?.(false);
+        reader.resume();
+        activeSecretCleanup = undefined;
+      };
+      const finish = (value: string | undefined): void => {
+        cleanup();
+        stdout.write("\n");
+        resolve(value);
+      };
+      const onData = (chunk: Buffer | string): void => {
+        for (const character of String(chunk)) {
+          if (character === "\u0003") {
+            cleanup();
+            reject(inputClosedError("Interactive input interrupted"));
+            return;
+          }
+          if (character === "\r" || character === "\n") {
+            finish(characters.join(""));
+          } else if (character === "\u007f" || character === "\b") {
+            if (characters.length > 0) {
+              characters.pop();
+              stdout.write("\b \b");
+            }
+          } else if (character >= " ") {
+            characters.push(character);
+            stdout.write("*");
+          }
+        }
+      };
+      activeSecretCleanup = () => {
+        cleanup();
+        resolve(undefined);
+      };
+      stdout.write(sanitizeTerminalText(prompt));
+      reader.pause();
+      stdin.setRawMode(true);
+      stdin.on("data", onData);
+    });
+  }
+
   function appendLine(prefix: string, value: string): void {
     const sanitized = sanitizeTerminalText(value);
     for (const line of sanitized.split("\n")) {
@@ -295,6 +396,14 @@ export function createDefaultTuiTerminal(): TuiTerminal {
       const answer = await askInput(`${sanitizeTerminalText(question)} [y/N] `);
       return ["y", "yes", "o", "oui"].includes(answer.trim().toLowerCase());
     },
+    select: async (title, options) => {
+      if (options.length === 0) return undefined;
+      const menu = [title, ...options.map((option, index) => `${index + 1}. ${sanitizeTerminalText(option.label)}`), ""].join("\n");
+      const answer = await askInput(`${menu}Choose a number: `);
+      const index = Number(answer.trim()) - 1;
+      return Number.isInteger(index) && index >= 0 && index < options.length ? index : undefined;
+    },
+    secret: (prompt) => askSecret(prompt),
     write: (line) => appendLine("", line),
     error: (line) => appendLine("[error] ", line),
     clear: () => {
@@ -311,6 +420,7 @@ export function createDefaultTuiTerminal(): TuiTerminal {
     },
     close: () => {
       inputClosed = true;
+      activeSecretCleanup?.();
       rejectWaitingQuestions(inputClosedError());
       inputReader?.close();
       inputReader = undefined;
