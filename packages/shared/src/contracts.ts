@@ -92,7 +92,7 @@ export interface ModelResponse {
   message: ModelMessage;
   toolCalls: ModelToolCall[];
   finishReason: ModelFinishReason;
-  usage?: TokenUsage;
+  usage?: TokenUsage | undefined;
 }
 
 export interface ModelProvider {
