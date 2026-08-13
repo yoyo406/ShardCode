@@ -1,10 +1,38 @@
 import type { PermissionDecision, PermissionRequest } from "@shardcode/shared";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { formatSlashHelp, parseInteractiveInput, type SlashCommand } from "./slash.js";
 import { sanitizeTerminalText } from "./render.js";
 
 const MAX_RENDERED_LINES = 200;
 const MAX_LINE_LENGTH = 4_000;
+
+export type TuiStatus = "waiting" | "running" | "completed" | "failed" | "aborted";
+
+export type InteractiveTaskRequest =
+  | { kind: "run"; prompt: string }
+  | { kind: "resume"; sessionId: string };
+
+export interface TuiSessionSnapshot {
+  id: string;
+  status: string;
+  provider: string;
+  model: string;
+  prompt: string;
+  updatedAt: string;
+}
+
+export interface TuiExecutionResult {
+  exitCode: number;
+  session?: TuiSessionSnapshot;
+}
+
+export interface InteractiveRuntimeInfo {
+  provider: string;
+  model: string;
+  permissionMode: string;
+  isolatedEnvironment: boolean;
+}
 
 export interface TuiTerminal {
   readonly isTTY: boolean;
@@ -13,6 +41,8 @@ export interface TuiTerminal {
   confirm(question: string): Promise<boolean>;
   write(line: string): void;
   error(line: string): void;
+  clear(): void;
+  setStatus(status: TuiStatus): void;
   finish(exitCode: number): void;
   close(): void;
 }
@@ -26,34 +56,139 @@ export interface TuiExecutionIO {
 export interface InteractiveTuiOptions {
   terminal: TuiTerminal;
   workspaceRoot: string;
-  execute(prompt: string, io: TuiExecutionIO): Promise<number>;
+  info: InteractiveRuntimeInfo;
+  execute(request: InteractiveTaskRequest, io: TuiExecutionIO): Promise<TuiExecutionResult>;
+}
+
+function statusFromExitCode(exitCode: number): TuiStatus {
+  if (exitCode === 0) return "completed";
+  if (exitCode === 130) return "aborted";
+  return "failed";
+}
+
+function safe(value: string): string {
+  return sanitizeTerminalText(value);
+}
+
+function renderStatus(snapshot: TuiSessionSnapshot | undefined): string {
+  if (!snapshot) return "No task has run in this TUI session.";
+  return [
+    `Last session: ${safe(snapshot.id)}`,
+    `Status: ${safe(snapshot.status)}`,
+    `Task: ${safe(snapshot.prompt)}`,
+    `Provider: ${safe(snapshot.provider)}`,
+    `Model: ${safe(snapshot.model)}`,
+    `Updated: ${safe(snapshot.updatedAt)}`
+  ].join("\n");
+}
+
+function isInterrupt(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as Error & { code?: unknown }).code;
+  return error.name === "AbortError" || code === "ABORT_ERR";
+}
+
+async function executeRequest(
+  options: InteractiveTuiOptions,
+  request: InteractiveTaskRequest,
+  io: TuiExecutionIO
+): Promise<TuiExecutionResult> {
+  try {
+    return await options.execute(request, io);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    options.terminal.error(message);
+    return { exitCode: 1 };
+  }
+}
+
+function renderLocalCommand(
+  command: SlashCommand,
+  options: InteractiveTuiOptions,
+  lastSession: TuiSessionSnapshot | undefined
+): { exit: boolean; lastSession: TuiSessionSnapshot | undefined } {
+  switch (command.name) {
+    case "help":
+      options.terminal.write(formatSlashHelp(command.target));
+      return { exit: false, lastSession };
+    case "clear":
+      options.terminal.clear();
+      return { exit: false, lastSession };
+    case "status":
+      options.terminal.write(renderStatus(lastSession));
+      return { exit: false, lastSession };
+    case "model":
+      options.terminal.write(`Provider: ${safe(options.info.provider)}\nModel: ${safe(options.info.model)}`);
+      return { exit: false, lastSession };
+    case "permissions":
+      options.terminal.write(
+        `Permission mode: ${safe(options.info.permissionMode)}\nIsolated environment: ${options.info.isolatedEnvironment ? "yes" : "no"}`
+      );
+      return { exit: false, lastSession };
+    case "resume":
+      return { exit: false, lastSession };
+    case "exit":
+      return { exit: true, lastSession };
+  }
 }
 
 export async function runInteractiveTui(options: InteractiveTuiOptions): Promise<number> {
-  let exitCode = 1;
+  let exitCode = 0;
   let opened = false;
+  let lastSession: TuiSessionSnapshot | undefined;
+  const io: TuiExecutionIO = {
+    write: (line) => options.terminal.write(line),
+    error: (line) => options.terminal.error(line),
+    ask: (question) => options.terminal.confirm(safe(question))
+  };
+
   try {
     if (!options.terminal.isTTY) {
       options.terminal.error("Interactive mode requires a TTY.");
+      exitCode = 1;
       return exitCode;
     }
 
     options.terminal.open(options.workspaceRoot);
     opened = true;
-    let prompt = "";
-    while (!prompt.trim()) {
-      prompt = await options.terminal.question("Task: ");
-      if (!prompt.trim()) options.terminal.write("A task description is required.");
-    }
 
-    exitCode = await options.execute(prompt.trim(), {
-      write: (line) => options.terminal.write(line),
-      error: (line) => options.terminal.error(line),
-      ask: (question) => options.terminal.confirm(sanitizeTerminalText(question))
-    });
-    return exitCode;
+    while (true) {
+      options.terminal.setStatus("waiting");
+      const input = await options.terminal.question("Task or /command: ");
+      const parsed = parseInteractiveInput(input);
+
+      if (parsed.kind === "invalid") {
+        options.terminal.error(parsed.message);
+        continue;
+      }
+
+      if (parsed.kind === "command") {
+        if (parsed.command.name === "exit") return exitCode;
+        if (parsed.command.name === "resume") {
+          options.terminal.setStatus("running");
+          const result = await executeRequest(options, { kind: "resume", sessionId: parsed.command.sessionId }, io);
+          exitCode = result.exitCode;
+          if (result.session) lastSession = result.session;
+          options.terminal.setStatus(statusFromExitCode(result.exitCode));
+          continue;
+        }
+        renderLocalCommand(parsed.command, options, lastSession);
+        continue;
+      }
+
+      options.terminal.setStatus("running");
+      const result = await executeRequest(options, { kind: "run", prompt: parsed.prompt }, io);
+      exitCode = result.exitCode;
+      if (result.session) lastSession = result.session;
+      options.terminal.setStatus(statusFromExitCode(result.exitCode));
+    }
   } catch (error) {
-    options.terminal.error(error instanceof Error ? error.message : String(error));
+    if (isInterrupt(error)) {
+      exitCode = 130;
+    } else {
+      options.terminal.error(error instanceof Error ? error.message : String(error));
+      exitCode = 1;
+    }
     return exitCode;
   } finally {
     if (opened) options.terminal.finish(exitCode);
@@ -64,8 +199,61 @@ export async function runInteractiveTui(options: InteractiveTuiOptions): Promise
 export function createDefaultTuiTerminal(): TuiTerminal {
   const isTTY = Boolean(stdin.isTTY && stdout.isTTY);
   const lines: string[] = [];
+  const queuedInput: string[] = [];
+  const waitingQuestions: Array<{
+    resolve(value: string): void;
+    reject(error: Error): void;
+  }> = [];
+  let inputReader: ReturnType<typeof createInterface> | undefined;
+  let inputClosed = false;
   let workspaceRoot = "";
-  let finalStatus: string | undefined;
+  let status: TuiStatus = "waiting";
+
+  function inputClosedError(message = "Interactive input closed"): Error {
+    const error = new Error(message);
+    error.name = "AbortError";
+    return error;
+  }
+
+  function rejectWaitingQuestions(error: Error): void {
+    while (waitingQuestions.length > 0) waitingQuestions.shift()?.reject(error);
+  }
+
+  function receiveLine(line: string): void {
+    const waiting = waitingQuestions.shift();
+    if (waiting) {
+      waiting.resolve(line);
+    } else {
+      queuedInput.push(line);
+    }
+  }
+
+  function openInputReader(): void {
+    inputClosed = false;
+    queuedInput.length = 0;
+    inputReader = createInterface({ input: stdin, output: stdout });
+    inputReader.on("line", receiveLine);
+    inputReader.on("SIGINT", () => {
+      inputClosed = true;
+      rejectWaitingQuestions(inputClosedError("Interactive input interrupted"));
+      inputReader?.close();
+    });
+    inputReader.on("close", () => {
+      inputClosed = true;
+      rejectWaitingQuestions(inputClosedError());
+    });
+  }
+
+  function askInput(prompt: string): Promise<string> {
+    if (!inputReader) return Promise.reject(inputClosedError());
+    stdout.write(sanitizeTerminalText(prompt));
+    const queued = queuedInput.shift();
+    if (queued !== undefined) return Promise.resolve(queued);
+    if (inputClosed) return Promise.reject(inputClosedError());
+    return new Promise<string>((resolve, reject) => {
+      waitingQuestions.push({ resolve, reject });
+    });
+  }
 
   function appendLine(prefix: string, value: string): void {
     const sanitized = sanitizeTerminalText(value);
@@ -80,7 +268,6 @@ export function createDefaultTuiTerminal(): TuiTerminal {
   }
 
   function redraw(): void {
-    const status = finalStatus ?? "waiting for task";
     const content = [
       "\u001b[2J\u001b[H",
       "ShardCode — interactive",
@@ -94,34 +281,40 @@ export function createDefaultTuiTerminal(): TuiTerminal {
     stdout.write(`${content}\n`);
   }
 
-  async function withPrompt<T>(callback: (terminal: ReturnType<typeof createInterface>) => Promise<T>): Promise<T> {
-    const terminal = createInterface({ input: stdin, output: stdout });
-    try {
-      return await callback(terminal);
-    } finally {
-      terminal.close();
-    }
-  }
-
   return {
     isTTY,
     open: (root) => {
       workspaceRoot = root;
       lines.length = 0;
-      finalStatus = undefined;
+      status = "waiting";
+      openInputReader();
       redraw();
     },
-    question: (prompt) => withPrompt((terminal) => terminal.question(sanitizeTerminalText(prompt))),
+    question: (prompt) => askInput(prompt),
     confirm: async (question) => {
-      const answer = await withPrompt((terminal) => terminal.question(`${sanitizeTerminalText(question)} [y/N] `));
+      const answer = await askInput(`${sanitizeTerminalText(question)} [y/N] `);
       return ["y", "yes", "o", "oui"].includes(answer.trim().toLowerCase());
     },
     write: (line) => appendLine("", line),
     error: (line) => appendLine("[error] ", line),
-    finish: (exitCode) => {
-      finalStatus = exitCode === 0 ? "completed" : exitCode === 130 ? "aborted" : "failed";
+    clear: () => {
+      lines.length = 0;
       redraw();
     },
-    close: () => undefined
+    setStatus: (nextStatus) => {
+      status = nextStatus;
+      redraw();
+    },
+    finish: (exitCode) => {
+      status = statusFromExitCode(exitCode);
+      redraw();
+    },
+    close: () => {
+      inputClosed = true;
+      rejectWaitingQuestions(inputClosedError());
+      inputReader?.close();
+      inputReader = undefined;
+      queuedInput.length = 0;
+    }
   };
 }
