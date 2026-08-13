@@ -7,11 +7,13 @@ import { ToolRuntime } from "@shardcode/tool-runtime";
 import { parseArgs, HELP_TEXT, type CliOptions, type CliProvider } from "./args.js";
 import { askForPermission } from "./prompts.js";
 import { renderEvent } from "./render.js";
+import { createDefaultTuiTerminal, runInteractiveTui, type TuiTerminal } from "./tui.js";
 
 export interface CliIO {
   write(line: string): void;
   error(line: string): void;
   ask?(question: string, request?: PermissionRequest, decision?: PermissionDecision): Promise<boolean>;
+  tui?: TuiTerminal;
   cwd: string;
   env: Record<string, string | undefined>;
 }
@@ -21,6 +23,7 @@ function defaultIO(): CliIO {
     write: (line) => process.stdout.write(`${line}\n`),
     error: (line) => process.stderr.write(`${line}\n`),
     ask: async (question) => askForPermission(question),
+    tui: createDefaultTuiTerminal(),
     cwd: process.cwd(),
     env: process.env
   };
@@ -74,20 +77,16 @@ function buildProvider(options: CliOptions, env: Record<string, string | undefin
   return createProvider(config);
 }
 
-export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number> {
-  const io = suppliedIO ?? defaultIO();
-  let options: CliOptions;
-  try {
-    options = parseArgs(argv);
-  } catch (error) {
-    io.error(error instanceof Error ? error.message : String(error));
-    return 2;
-  }
-  if (options.command === "help") {
-    io.write(HELP_TEXT);
-    return 0;
-  }
+type TaskCliOptions = CliOptions & { command: "run" | "resume" };
 
+function asTaskOptions(options: CliOptions): TaskCliOptions {
+  if (options.command !== "run" && options.command !== "resume") {
+    throw new Error(`Unsupported task command: ${options.command}`);
+  }
+  return options as TaskCliOptions;
+}
+
+async function executeTask(options: TaskCliOptions, io: CliIO): Promise<number> {
   try {
     const toolRuntime = await ToolRuntime.create({
       workspaceRoot: io.cwd,
@@ -136,4 +135,37 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
     io.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
+}
+
+export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number> {
+  const io = suppliedIO ?? defaultIO();
+  let options: CliOptions;
+  try {
+    options = parseArgs(argv);
+  } catch (error) {
+    io.error(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
+  if (options.command === "help") {
+    io.write(HELP_TEXT);
+    return 0;
+  }
+  if (options.command === "interactive") {
+    if (options.json) {
+      io.error("--json cannot be used with interactive mode.");
+      return 2;
+    }
+    const terminal = io.tui ?? createDefaultTuiTerminal();
+    return runInteractiveTui({
+      terminal,
+      workspaceRoot: io.cwd,
+      execute: (prompt, tuiIO) => executeTask(
+        { ...options, command: "run", prompt },
+        { ...io, write: tuiIO.write, error: tuiIO.error, ask: tuiIO.ask }
+      )
+    });
+  }
+  if (options.command === "run" || options.command === "resume") return executeTask(asTaskOptions(options), io);
+  io.error(`Unsupported CLI command: ${options.command}`);
+  return 2;
 }
