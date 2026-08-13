@@ -43,9 +43,27 @@ describe("CLI arguments", () => {
     expect(() => parseArgs(["run", "task", "--not-real"])).toThrow("unknown option");
   });
 
+  it("accepts every connectable provider from the command line", () => {
+    for (const provider of [
+      "openai",
+      "openai-codex",
+      "google-gemini",
+      "mistral",
+      "anthropic-claude",
+      "opencode-zen",
+      "opencode-go",
+      "cline",
+      "kilo-code"
+    ]) {
+      expect(parseArgs(["run", "task", "--provider", provider])).toMatchObject({ provider, providerExplicit: true });
+    }
+  });
+
   it("documents interactive and direct launcher usage", () => {
     expect(HELP_TEXT).toContain("shard \"task description\"");
     expect(HELP_TEXT).toContain("shardcode run");
     expect(HELP_TEXT).toContain("shardcode resume");
+    expect(HELP_TEXT).toContain("openai-codex");
+    expect(HELP_TEXT).toContain("kilo-code");
   });
 });
