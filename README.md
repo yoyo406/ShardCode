@@ -10,15 +10,32 @@ approved commands, observes failures, and iterates until validation succeeds.
 pnpm install
 pnpm build
 
-# OpenAI is the default provider.
+# Start the interactive TUI.
+pnpm shard
+
+# OpenAI is the default provider for a direct task.
 export OPENAI_API_KEY="..."
-pnpm shardcode run "Implement the requested change and add tests"
+pnpm shard "Implement the requested change and add tests"
 ```
+
+After building, the installed CLI exposes both `shard` and `shardcode`:
+
+```bash
+shard
+shard "Fix the failing tests"
+shardcode run "Implement a feature"
+shardcode resume <session-id>
+```
+
+Running `shard` with no task opens the interactive terminal UI. It displays
+runtime activity as it happens and asks for permission when the selected mode
+requires confirmation. The explicit `run` and `resume` forms remain useful
+for scripts and automation.
 
 During development, invoke the compiled binary directly:
 
 ```bash
-node packages/cli/dist/index.js run "Inspect the repository"
+node packages/cli/dist/index.js "Inspect the repository"
 ```
 
 The CLI defaults to permission mode `ask`. Read-only exploration is allowed;
