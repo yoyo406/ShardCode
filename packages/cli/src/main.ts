@@ -97,7 +97,7 @@ function buildProvider(
   connection?: StoredProviderConnection
 ) {
   const provider = connection?.providerId ?? options.provider;
-  const model = connection?.modelId ?? (options.modelExplicit ? options.model : defaultModel(provider));
+  const model = options.modelExplicit ? options.model : connection?.modelId ?? defaultModel(provider);
   if (provider === "scripted") {
     return createScriptedProvider(model, [
       {
