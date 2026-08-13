@@ -1,4 +1,4 @@
-import type { PermissionDecision, PermissionRequest, ProviderConfig, ShardCodeEvent } from "@shardcode/shared";
+import type { PermissionDecision, PermissionRequest, ProviderConfig, Session, ShardCodeEvent } from "@shardcode/shared";
 import { ContextEngine } from "@shardcode/context-engine";
 import { MemoryStore } from "@shardcode/memory";
 import { createProvider, createScriptedProvider } from "@shardcode/providers";
@@ -7,7 +7,14 @@ import { ToolRuntime } from "@shardcode/tool-runtime";
 import { parseArgs, HELP_TEXT, type CliOptions, type CliProvider } from "./args.js";
 import { askForPermission } from "./prompts.js";
 import { renderEvent } from "./render.js";
-import { createDefaultTuiTerminal, runInteractiveTui, type TuiTerminal } from "./tui.js";
+import {
+  createDefaultTuiTerminal,
+  runInteractiveTui,
+  type InteractiveTaskRequest,
+  type TuiExecutionResult,
+  type TuiSessionSnapshot,
+  type TuiTerminal
+} from "./tui.js";
 
 export interface CliIO {
   write(line: string): void;
@@ -79,6 +86,11 @@ function buildProvider(options: CliOptions, env: Record<string, string | undefin
 
 type TaskCliOptions = CliOptions & { command: "run" | "resume" };
 
+interface TaskExecutionResult {
+  exitCode: number;
+  session?: Session;
+}
+
 function asTaskOptions(options: CliOptions): TaskCliOptions {
   if (options.command !== "run" && options.command !== "resume") {
     throw new Error(`Unsupported task command: ${options.command}`);
@@ -86,7 +98,18 @@ function asTaskOptions(options: CliOptions): TaskCliOptions {
   return options as TaskCliOptions;
 }
 
-async function executeTask(options: TaskCliOptions, io: CliIO): Promise<number> {
+function sessionSnapshot(session: Session): TuiSessionSnapshot {
+  return {
+    id: session.id,
+    status: session.status,
+    provider: session.provider,
+    model: session.model,
+    prompt: session.rootTask.prompt,
+    updatedAt: session.updatedAt
+  };
+}
+
+async function executeTask(options: TaskCliOptions, io: CliIO): Promise<TaskExecutionResult> {
   try {
     const toolRuntime = await ToolRuntime.create({
       workspaceRoot: io.cwd,
@@ -130,10 +153,13 @@ async function executeTask(options: TaskCliOptions, io: CliIO): Promise<number> 
       ? await runtime.run(options.prompt ?? "")
       : await runtime.resume(options.sessionId ?? "");
     if (!options.json && session.finalMessage) io.write(session.finalMessage);
-    return session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1;
+    return {
+      exitCode: session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1,
+      session
+    };
   } catch (error) {
     io.error(error instanceof Error ? error.message : String(error));
-    return 1;
+    return { exitCode: 1 };
   }
 }
 
@@ -159,13 +185,30 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
     return runInteractiveTui({
       terminal,
       workspaceRoot: io.cwd,
-      execute: (prompt, tuiIO) => executeTask(
-        { ...options, command: "run", prompt },
-        { ...io, write: tuiIO.write, error: tuiIO.error, ask: tuiIO.ask }
-      )
+      info: {
+        provider: options.provider,
+        model: options.modelExplicit ? options.model : defaultModel(options.provider),
+        permissionMode: options.permissionMode,
+        isolatedEnvironment: options.isolatedEnvironment
+      },
+      execute: async (request: InteractiveTaskRequest, tuiIO): Promise<TuiExecutionResult> => {
+        const taskOptions: TaskCliOptions = request.kind === "run"
+          ? { ...options, command: "run", prompt: request.prompt }
+          : { ...options, command: "resume", sessionId: request.sessionId };
+        const result = await executeTask(
+          taskOptions,
+          { ...io, write: tuiIO.write, error: tuiIO.error, ask: tuiIO.ask }
+        );
+        return {
+          exitCode: result.exitCode,
+          ...(result.session ? { session: sessionSnapshot(result.session) } : {})
+        };
+      }
     });
   }
-  if (options.command === "run" || options.command === "resume") return executeTask(asTaskOptions(options), io);
+  if (options.command === "run" || options.command === "resume") {
+    return (await executeTask(asTaskOptions(options), io)).exitCode;
+  }
   io.error(`Unsupported CLI command: ${options.command}`);
   return 2;
 }
