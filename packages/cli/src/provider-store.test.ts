@@ -88,4 +88,15 @@ describe("ProviderStore", () => {
 
     await expect(store.load()).rejects.toThrow("symbolic link");
   });
+
+  it("repairs permissive permissions on an existing config file", async () => {
+    const configHome = await temporaryDirectory();
+    const store = new ProviderStore({ env: { SHARDCODE_CONFIG_HOME: configHome }, platform: "linux" });
+
+    await store.save(connection("openai"));
+    await chmod(store.filePath, 0o644);
+
+    await expect(store.load()).resolves.toMatchObject({ activeProviderId: "openai" });
+    expect((await stat(store.filePath)).mode & 0o777).toBe(0o600);
+  });
 });

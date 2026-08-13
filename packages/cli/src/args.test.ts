@@ -40,6 +40,7 @@ describe("CLI arguments", () => {
 
   it("parses resume and rejects unknown options", () => {
     expect(parseArgs(["resume", "session-123"])).toMatchObject({ command: "resume", sessionId: "session-123" });
+    expect(() => parseArgs(["resume", "session-123", "extra"])).toThrow("session id");
     expect(() => parseArgs(["run", "task", "--not-real"])).toThrow("unknown option");
   });
 

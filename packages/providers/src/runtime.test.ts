@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ModelRequest } from "@shardcode/shared";
-import { createGatewayProvider, createOpenAICompatibleProvider, createProvider, createResponsesProvider } from "./index.js";
+import { createAnthropicProvider, createGatewayProvider, createOpenAICompatibleProvider, createProvider, createResponsesProvider } from "./index.js";
 
 const request: ModelRequest = {
   model: "model-under-test",
@@ -66,6 +66,23 @@ describe("runtime provider adapters", () => {
     expect(response.toolCalls[0]).toEqual({ id: "call-1", name: "read_file", arguments: { path: "README.md" } });
   });
 
+  it("disables streaming for OpenAI-compatible JSON adapters", async () => {
+    let body: Record<string, unknown> | undefined;
+    const provider = createOpenAICompatibleProvider({
+      provider: "cline",
+      model: request.model,
+      apiKey: "cline-key",
+      fetch: async (_input, init) => {
+        body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse({ choices: [{ message: { role: "assistant", content: "Done" }, finish_reason: "stop" }] });
+      }
+    });
+
+    await provider.complete(request);
+
+    expect(body?.stream).toBe(false);
+  });
+
   it("maps the Responses API input and function calls for OpenAI-Codex", async () => {
     let captured: { url: string; headers: Headers; body: Record<string, unknown> } | undefined;
     const provider = createResponsesProvider({
@@ -79,6 +96,7 @@ describe("runtime provider adapters", () => {
           body: JSON.parse(String(init?.body)) as Record<string, unknown>
         };
         return jsonResponse({
+          status: "completed",
           output: [
             { type: "message", content: [{ type: "output_text", text: "I will read it." }] },
             { type: "function_call", call_id: "call-1", name: "read_file", arguments: '{"path":"README.md"}' }
@@ -101,6 +119,36 @@ describe("runtime provider adapters", () => {
     ]);
     expect(response.toolCalls[0]).toEqual({ id: "call-1", name: "read_file", arguments: { path: "README.md" } });
     expect(response.usage?.totalTokens).toBe(14);
+    expect(response.finishReason).toBe("tool_call");
+  });
+
+  it("normalizes a completed Responses API response to a stop", async () => {
+    const provider = createResponsesProvider({
+      provider: "openai-codex",
+      model: request.model,
+      apiKey: "codex-key",
+      fetch: async () => jsonResponse({
+        status: "completed",
+        output: [{ type: "message", content: [{ type: "output_text", text: "Done" }] }]
+      })
+    });
+
+    await expect(provider.complete(request)).resolves.toMatchObject({ finishReason: "stop" });
+  });
+
+  it("normalizes Anthropic terminal stop reasons", async () => {
+    const provider = createAnthropicProvider({
+      provider: "anthropic-claude",
+      model: request.model,
+      apiKey: "anthropic-key",
+      fetch: async () => jsonResponse({
+        content: [{ type: "text", text: "Truncated" }],
+        stop_reason: "max_tokens",
+        usage: { input_tokens: 4, output_tokens: 2 }
+      })
+    });
+
+    await expect(provider.complete(request)).resolves.toMatchObject({ finishReason: "length" });
   });
 
   it("routes gateway providers through their configured protocol", async () => {

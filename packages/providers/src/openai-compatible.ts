@@ -51,7 +51,8 @@ export function createOpenAICompatibleProvider(config: ProviderConfig): ModelPro
       const body: Record<string, unknown> = {
         model: request.model,
         messages: request.messages.map(messageForOpenAI),
-        tools: toolDefinitionsForOpenAI(request.tools)
+        tools: toolDefinitionsForOpenAI(request.tools),
+        stream: false
       };
       if (request.maxOutputTokens !== undefined) body.max_tokens = request.maxOutputTokens;
       if (request.temperature !== undefined) body.temperature = request.temperature;

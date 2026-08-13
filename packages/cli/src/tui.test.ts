@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   runInteractiveTui,
+  secretInputRemainder,
   type InteractiveTaskRequest,
   type TuiExecutionResult,
   type TuiSessionSnapshot,
@@ -97,6 +98,11 @@ function snapshot(overrides: Partial<TuiSessionSnapshot> = {}): TuiSessionSnapsh
 }
 
 describe("interactive TUI", () => {
+  it("preserves pasted lines after a masked secret", () => {
+    expect(secretInputRemainder("secret-key\r\n1\n/exit\n")).toEqual(["1", "/exit"]);
+    expect(secretInputRemainder("secret-key")).toBeUndefined();
+  });
+
   it("keeps running local commands and tasks in one session", async () => {
     const terminal = fakeTerminal(["/model", "/permissions", "/status", "/clear", "/help status", "/unknown", "Implement OAuth", "/status", "/exit"]);
     const requests: InteractiveTaskRequest[] = [];
