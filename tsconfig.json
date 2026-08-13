@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/providers" },
+    { "path": "./packages/tool-runtime" },
+    { "path": "./packages/context-engine" },
+    { "path": "./packages/memory" },
+    { "path": "./packages/sandbox" },
+    { "path": "./packages/runtime" },
+    { "path": "./packages/cli" }
+  ]
+}

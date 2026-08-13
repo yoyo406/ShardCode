@@ -1,0 +1,26 @@
+{
+  "name": "@shardcode/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": "./dist/index.js" },
+  "bin": {
+    "shardcode": "./dist/index.js"
+  },
+  "dependencies": {
+    "@shardcode/context-engine": "workspace:*",
+    "@shardcode/memory": "workspace:*",
+    "@shardcode/providers": "workspace:*",
+    "@shardcode/runtime": "workspace:*",
+    "@shardcode/shared": "workspace:*",
+    "@shardcode/tool-runtime": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run src",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  }
+}

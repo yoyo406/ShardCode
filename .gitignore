@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+.shardcode/settings.local.json
+.shardcode/sessions/
+.shardcode/*.jsonl
+.worktrees/

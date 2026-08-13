@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../context-engine" },
+    { "path": "../memory" },
+    { "path": "../providers" },
+    { "path": "../runtime" },
+    { "path": "../shared" },
+    { "path": "../tool-runtime" }
+  ]
+}
