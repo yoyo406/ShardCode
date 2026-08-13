@@ -168,7 +168,7 @@ export function parseArgs(argv: string[]): CliOptions {
 
   const command: "interactive" | "run" | "resume" = explicitCommand ? first : directPrompt ? "run" : "interactive";
   if (command === "run" && positional.length === 0) throw new Error("run requires a task prompt");
-  if (command === "resume" && positional.length === 0) throw new Error("resume requires a session id");
+  if (command === "resume" && positional.length !== 1) throw new Error("resume requires exactly one session id");
   return {
     command,
     ...(command === "run" ? { prompt: positional.join(" ") } : { sessionId: positional[0]! }),

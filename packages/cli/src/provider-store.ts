@@ -130,6 +130,7 @@ export class ProviderStore {
   }
 
   async load(): Promise<ProviderConfigFile> {
+    await ensureDirectory(this.directory);
     await rejectSymlink(this.filePath);
     let content: string;
     try {
@@ -138,6 +139,7 @@ export class ProviderStore {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return { connections: [] };
       throw error;
     }
+    await chmod(this.filePath, 0o600);
     try {
       return parseConfig(JSON.parse(content) as unknown);
     } catch (error) {

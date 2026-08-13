@@ -110,6 +110,14 @@ function isInterrupt(error: unknown): boolean {
   return error.name === "AbortError" || code === "ABORT_ERR";
 }
 
+export function secretInputRemainder(text: string): string[] | undefined {
+  const newlineIndex = text.search(/[\r\n]/);
+  if (newlineIndex < 0) return undefined;
+  const newline = text[newlineIndex];
+  const remainderStart = newline === "\r" && text[newlineIndex + 1] === "\n" ? newlineIndex + 2 : newlineIndex + 1;
+  return text.slice(remainderStart).split(/\r?\n/).filter(Boolean);
+}
+
 async function executeRequest(
   options: InteractiveTuiOptions,
   request: InteractiveTaskRequest,
@@ -290,6 +298,17 @@ export function createDefaultTuiTerminal(): TuiTerminal {
     });
     inputReader.on("close", () => {
       inputClosed = true;
+      activeSecretCleanup?.();
+      rejectWaitingQuestions(inputClosedError());
+    });
+    stdin.on("end", () => {
+      inputClosed = true;
+      activeSecretCleanup?.();
+      rejectWaitingQuestions(inputClosedError());
+    });
+    stdin.on("close", () => {
+      inputClosed = true;
+      activeSecretCleanup?.();
       rejectWaitingQuestions(inputClosedError());
     });
   }
@@ -326,14 +345,20 @@ export function createDefaultTuiTerminal(): TuiTerminal {
         resolve(value);
       };
       const onData = (chunk: Buffer | string): void => {
-        for (const character of String(chunk)) {
+        const text = String(chunk);
+        for (let index = 0; index < text.length; index += 1) {
+          const character = text[index];
+          if (character === undefined) continue;
           if (character === "\u0003") {
             cleanup();
             reject(inputClosedError("Interactive input interrupted"));
             return;
           }
           if (character === "\r" || character === "\n") {
+            const remainder = secretInputRemainder(text.slice(index)) ?? [];
             finish(characters.join(""));
+            queuedInput.push(...remainder);
+            return;
           } else if (character === "\u007f" || character === "\b") {
             if (characters.length > 0) {
               characters.pop();
@@ -353,6 +378,7 @@ export function createDefaultTuiTerminal(): TuiTerminal {
       reader.pause();
       stdin.setRawMode(true);
       stdin.on("data", onData);
+      stdin.resume();
     });
   }
 
@@ -399,9 +425,12 @@ export function createDefaultTuiTerminal(): TuiTerminal {
     select: async (title, options) => {
       if (options.length === 0) return undefined;
       const menu = [title, ...options.map((option, index) => `${index + 1}. ${sanitizeTerminalText(option.label)}`), ""].join("\n");
-      const answer = await askInput(`${menu}Choose a number: `);
-      const index = Number(answer.trim()) - 1;
-      return Number.isInteger(index) && index >= 0 && index < options.length ? index : undefined;
+      while (true) {
+        const answer = await askInput(`${menu}Choose a number: `);
+        if (!answer.trim()) continue;
+        const index = Number(answer.trim()) - 1;
+        return Number.isInteger(index) && index >= 0 && index < options.length ? index : undefined;
+      }
     },
     secret: (prompt) => askSecret(prompt),
     write: (line) => appendLine("", line),

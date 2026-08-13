@@ -88,8 +88,8 @@ export function toolDefinitionsForGemini(tools: ToolDefinition[]): JsonRecord[] 
 
 export function normalizeFinishReason(value: unknown, hasToolCalls: boolean): ModelResponse["finishReason"] {
   if (hasToolCalls) return "tool_call";
-  if (value === "length" || value === "MAX_TOKENS") return "length";
-  if (value === "stop" || value === "STOP") return "stop";
+  if (value === "length" || value === "MAX_TOKENS" || value === "max_tokens" || value === "incomplete") return "length";
+  if (value === "stop" || value === "STOP" || value === "completed" || value === "end_turn" || value === "stop_sequence") return "stop";
   return "unknown";
 }
 
