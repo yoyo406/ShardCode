@@ -219,6 +219,8 @@ export type ProviderId =
   | "opencode-go"
   | "cline"
   | "kilo-code"
+  | "anthropic"
+  | "gemini"
   | "scripted";
 
 export type ProviderProtocol =
