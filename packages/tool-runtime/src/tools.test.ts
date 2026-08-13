@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -67,5 +67,50 @@ describe("repository tools", () => {
     await expect(readFile(join(root, "empty.txt"), "utf8")).resolves.toBe("");
     const storage = new FileStorage(join(root, ".shardcode"));
     await expect(storage.write("../escape.txt", "bad")).rejects.toThrow("escapes root");
+  });
+
+  it("does not follow a workspace symlink to read or write outside the workspace", async () => {
+    const root = await workspace();
+    const outside = await mkdtemp(join(tmpdir(), "shardcode-outside-"));
+    await writeFile(join(outside, "target.txt"), "outside");
+    await symlink(join(outside, "target.txt"), join(root, "link.txt"));
+    const runtime = new ToolRuntime({ workspaceRoot: root, mode: "acceptEdits" });
+
+    const read = await runtime.execute({ id: "symlink-read", name: "read_file", input: { path: "link.txt" } });
+    const write = await runtime.execute({ id: "symlink-write", name: "write_file", input: { path: "link.txt", content: "changed" } });
+
+    expect(read.status).toBe("failed");
+    expect(write.status).toBe("failed");
+    await expect(readFile(join(outside, "target.txt"), "utf8")).resolves.toBe("outside");
+  });
+
+  it("does not write session storage through a symlinked storage root", async () => {
+    const root = await workspace();
+    const outside = await mkdtemp(join(tmpdir(), "shardcode-storage-outside-"));
+    await symlink(outside, join(root, ".shardcode"));
+    const storage = new FileStorage(join(root, ".shardcode"));
+
+    await expect(storage.write("sessions/session.json", "secret")).rejects.toThrow("symbolic links");
+    await expect(readFile(join(outside, "sessions", "session.json"), "utf8")).rejects.toThrow();
+  });
+
+  it("does not enumerate protected environment and secret files", async () => {
+    const root = await workspace();
+    await writeFile(join(root, ".env"), "TOKEN=do-not-read");
+    await writeFile(join(root, ".env.local"), "TOKEN=do-not-read");
+    await mkdir(join(root, "secrets"));
+    await writeFile(join(root, "secrets", "key.txt"), "do-not-read");
+    await mkdir(join(root, "credentials"));
+    await writeFile(join(root, "credentials", "key.txt"), "do-not-read");
+    const runtime = new ToolRuntime({ workspaceRoot: root, mode: "ask" });
+
+    const listed = await runtime.execute({ id: "list-safe", name: "list_files", input: {} });
+    const searched = await runtime.execute({ id: "grep-safe", name: "grep", input: { pattern: "do-not-read" } });
+    const matched = await runtime.execute({ id: "glob-safe", name: "glob", input: { pattern: "**/*" } });
+
+    expect(listed.output).not.toContain(".env");
+    expect(listed.output).not.toContain("secrets/");
+    expect(searched.output).toBe("");
+    expect(matched.output).not.toContain("credentials/");
   });
 });

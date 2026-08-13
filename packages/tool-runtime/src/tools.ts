@@ -40,7 +40,18 @@ export async function walkFiles(root: string, current = root): Promise<string[]>
   const entries = await readdir(current, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === ".shardcode" || entry.name === "node_modules" || entry.name === "dist" || entry.name === "secrets") continue;
+    const name = entry.name.toLowerCase();
+    if (
+      name === ".git" ||
+      name === ".shardcode" ||
+      name === "node_modules" ||
+      name === "dist" ||
+      name === "secrets" ||
+      name === "secret" ||
+      name === "credentials" ||
+      name === ".env" ||
+      name.startsWith(".env.")
+    ) continue;
     const path = join(current, entry.name);
     if (entry.isDirectory()) files.push(...(await walkFiles(root, path)));
     else if (entry.isFile()) files.push(path);
