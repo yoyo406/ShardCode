@@ -1,9 +1,10 @@
 import type { PermissionDecision, PermissionRequest, ProviderConfig, Session, ShardCodeEvent } from "@shardcode/shared";
+import { resolve } from "node:path";
 import { ContextEngine } from "@shardcode/context-engine";
 import { MemoryStore } from "@shardcode/memory";
 import { createProvider, createScriptedProvider } from "@shardcode/providers";
 import { AgentRuntime, JsonSessionStore } from "@shardcode/runtime";
-import { ToolRuntime } from "@shardcode/tool-runtime";
+import { FileStorage, ToolRuntime } from "@shardcode/tool-runtime";
 import { parseArgs, HELP_TEXT, type CliOptions, type CliProvider } from "./args.js";
 import { askForPermission } from "./prompts.js";
 import { renderEvent } from "./render.js";
@@ -62,9 +63,9 @@ function buildProvider(options: CliOptions, env: Record<string, string | undefin
         message: {
           role: "assistant",
           content: "I will run the repository checks.",
-          toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command: "node -e \"console.log('scripted check')\"" } }]
+          toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command: "node --check packages/cli/dist/index.js" } }]
         },
-        toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command: "node -e \"console.log('scripted check')\"" } }],
+        toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command: "node --check packages/cli/dist/index.js" } }],
         finishReason: "tool_call"
       },
       {
@@ -82,6 +83,10 @@ function buildProvider(options: CliOptions, env: Record<string, string | undefin
     ...(apiKey ? { apiKey } : {})
   };
   return createProvider(config);
+}
+
+function workspaceRootFor(io: CliIO): string {
+  return resolve(io.env.SHARDCODE_WORKSPACE_ROOT ?? io.env.INIT_CWD ?? io.cwd);
 }
 
 type TaskCliOptions = CliOptions & { command: "run" | "resume" };
@@ -111,8 +116,9 @@ function sessionSnapshot(session: Session): TuiSessionSnapshot {
 
 async function executeTask(options: TaskCliOptions, io: CliIO): Promise<TaskExecutionResult> {
   try {
+    const workspaceRoot = workspaceRootFor(io);
     const toolRuntime = await ToolRuntime.create({
-      workspaceRoot: io.cwd,
+      workspaceRoot,
       mode: options.permissionMode,
       isolatedEnvironment: options.isolatedEnvironment,
       ask: async (request, decision) => io.ask ? io.ask(
@@ -139,9 +145,9 @@ async function executeTask(options: TaskCliOptions, io: CliIO): Promise<TaskExec
       provider,
       tools: toolRuntime,
       context: new ContextEngine(toolRuntime),
-      memory: new MemoryStore(toolRuntime.storage()),
+      memory: new MemoryStore(toolRuntime.storage(), new FileStorage(workspaceRoot)),
       sessionStore,
-      workspaceRoot: io.cwd,
+      workspaceRoot,
       budget: {
         maxTokens: options.maxTokens,
         maxToolCalls: options.maxToolCalls,
@@ -184,7 +190,7 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
     const terminal = io.tui ?? createDefaultTuiTerminal();
     return runInteractiveTui({
       terminal,
-      workspaceRoot: io.cwd,
+      workspaceRoot: workspaceRootFor(io),
       info: {
         provider: options.provider,
         model: options.modelExplicit ? options.model : defaultModel(options.provider),

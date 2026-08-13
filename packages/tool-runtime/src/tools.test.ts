@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createProcessSandbox } from "@shardcode/sandbox";
 import { ToolRuntime } from "./runtime.js";
 import { FileStorage } from "./storage.js";
+import { globWorkspace } from "./tools.js";
 
 async function workspace(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "shardcode-tools-"));
@@ -69,6 +70,39 @@ describe("repository tools", () => {
     await expect(storage.write("../escape.txt", "bad")).rejects.toThrow("escapes root");
   });
 
+  it("matches direct and nested files with a double-star glob", async () => {
+    const root = await workspace();
+    await writeFile(join(root, "index.ts"), "export {};\n");
+    await writeFile(join(root, "nested.ts"), "export {};\n");
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(join(root, "src", "lib"), { recursive: true }));
+    await writeFile(join(root, "src", "index.ts"), "export {};\n");
+    await writeFile(join(root, "src", "lib", "nested.ts"), "export {};\n");
+
+    await expect(globWorkspace(root, "src/**/*.ts")).resolves.toEqual(["src/index.ts", "src/lib/nested.ts"]);
+  });
+
+  it("fails closed for shell execution without an explicit sandbox", async () => {
+    const root = await workspace();
+    const runtime = new ToolRuntime({ workspaceRoot: root, mode: "acceptEdits", ask: async () => true });
+
+    const result = await runtime.execute({ id: "shell-default", name: "run_shell", input: { command: "node -e \"process.exit(0)\"" } });
+
+    expect(result.status).toBe("failed");
+    expect(result.output).toContain("process sandbox is unavailable");
+  });
+
+  it("denies file operations through symlinks escaping the workspace", async () => {
+    const root = await workspace();
+    const outside = await mkdtemp(join(tmpdir(), "shardcode-outside-"));
+    await symlink(outside, join(root, "linked"));
+    const runtime = new ToolRuntime({ workspaceRoot: root, mode: "acceptEdits" });
+
+    const result = await runtime.execute({ id: "symlink-escape", name: "write_file", input: { path: "linked/escaped.txt", content: "outside" } });
+
+    expect(["denied", "failed"]).toContain(result.status);
+    await expect(readFile(join(outside, "escaped.txt"), "utf8")).rejects.toThrow();
+  });
+
   it("does not follow a workspace symlink to read or write outside the workspace", async () => {
     const root = await workspace();
     const outside = await mkdtemp(join(tmpdir(), "shardcode-outside-"));
@@ -79,8 +113,8 @@ describe("repository tools", () => {
     const read = await runtime.execute({ id: "symlink-read", name: "read_file", input: { path: "link.txt" } });
     const write = await runtime.execute({ id: "symlink-write", name: "write_file", input: { path: "link.txt", content: "changed" } });
 
-    expect(read.status).toBe("failed");
-    expect(write.status).toBe("failed");
+    expect(["denied", "failed"]).toContain(read.status);
+    expect(["denied", "failed"]).toContain(write.status);
     await expect(readFile(join(outside, "target.txt"), "utf8")).resolves.toBe("outside");
   });
 

@@ -12,7 +12,14 @@ export interface MemoryEntry {
 }
 
 export class MemoryStore {
-  constructor(private readonly storage: StorageAdapter) {}
+  constructor(
+    private readonly storage: StorageAdapter,
+    private readonly projectStorage?: StorageAdapter
+  ) {}
+
+  async readProjectGuidance(): Promise<string | undefined> {
+    return this.projectStorage?.read("SHARDCODE.md");
+  }
 
   async list(scope: MemoryScope): Promise<MemoryEntry[]> {
     const content = await this.storage.read(`memory/${scope}.json`);

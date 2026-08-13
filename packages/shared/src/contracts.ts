@@ -176,6 +176,7 @@ export interface Budget {
   maxWallClockSeconds: number;
   usedTokens: number;
   usedToolCalls: number;
+  startedAt?: string;
 }
 
 export interface WorktreeRef {

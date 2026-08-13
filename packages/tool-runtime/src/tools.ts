@@ -71,8 +71,13 @@ export function globToRegExp(pattern: string): RegExp {
     const char = pattern[index];
     if (char === "*") {
       if (pattern[index + 1] === "*") {
-        result += ".*";
-        index += 1;
+        if (pattern[index + 2] === "/") {
+          result += "(?:.*/)?";
+          index += 2;
+        } else {
+          result += ".*";
+          index += 1;
+        }
       } else result += "[^/]*";
     } else if (char === "?") result += "[^/]";
     else result += (char ?? "").replace(/[.+^${}()|[\]\\]/g, "\\$&");

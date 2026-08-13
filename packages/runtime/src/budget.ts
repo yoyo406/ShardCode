@@ -8,13 +8,17 @@ export class BudgetTracker {
   private current: Budget;
 
   constructor(budget: Budget | BudgetLimits, startedAt = Date.now()) {
-    this.startedAt = startedAt;
+    const persistedStartedAt = "startedAt" in budget && typeof budget.startedAt === "string"
+      ? Date.parse(budget.startedAt)
+      : Number.NaN;
+    this.startedAt = Number.isFinite(persistedStartedAt) ? persistedStartedAt : startedAt;
     this.current = {
       maxTokens: budget.maxTokens,
       maxToolCalls: budget.maxToolCalls,
       maxWallClockSeconds: budget.maxWallClockSeconds,
       usedTokens: "usedTokens" in budget ? budget.usedTokens : 0,
-      usedToolCalls: "usedToolCalls" in budget ? budget.usedToolCalls : 0
+      usedToolCalls: "usedToolCalls" in budget ? budget.usedToolCalls : 0,
+      startedAt: new Date(this.startedAt).toISOString()
     };
   }
 

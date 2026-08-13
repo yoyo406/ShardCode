@@ -1,5 +1,6 @@
+import { dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
+import { realpathSync } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
-import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 
 export interface WorkspacePath {
   absolute: string;
@@ -23,11 +24,29 @@ function isProtectedRelativePath(value: string): boolean {
   );
 }
 
+function existingRealPath(value: string): string {
+  let current = value;
+  while (true) {
+    try {
+      return realpathSync.native(current);
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return resolve(value);
+      current = parent;
+    }
+  }
+}
+
 export function resolveWorkspacePath(workspaceRoot: string, requested: string): WorkspacePath {
   const root = resolve(workspaceRoot);
   const absolute = resolve(root, requested);
   const relativePath = relative(root, absolute).split(sep).join("/");
-  const withinWorkspace = relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+  const physicalRoot = existingRealPath(root);
+  const physicalTarget = existingRealPath(absolute);
+  const physicalRelative = relative(physicalRoot, physicalTarget);
+  const lexicalWithinWorkspace = relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+  const physicalWithinWorkspace = physicalRelative === "" || (!physicalRelative.startsWith("..") && !isAbsolute(physicalRelative));
+  const withinWorkspace = lexicalWithinWorkspace && physicalWithinWorkspace;
   return {
     absolute,
     relative: relativePath,
