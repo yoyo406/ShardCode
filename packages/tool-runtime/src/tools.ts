@@ -30,11 +30,17 @@ export function requiredString(input: InputRecord, key: string): string {
   return value;
 }
 
+export function stringValue(input: InputRecord, key: string): string {
+  const value = input[key];
+  if (typeof value !== "string") throw new Error(`${key} must be a string`);
+  return value;
+}
+
 export async function walkFiles(root: string, current = root): Promise<string[]> {
   const entries = await readdir(current, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === "node_modules" || entry.name === "dist") continue;
+    if (entry.name === ".git" || entry.name === ".shardcode" || entry.name === "node_modules" || entry.name === "dist" || entry.name === "secrets") continue;
     const path = join(current, entry.name);
     if (entry.isDirectory()) files.push(...(await walkFiles(root, path)));
     else if (entry.isFile()) files.push(path);

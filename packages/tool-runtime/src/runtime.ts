@@ -12,7 +12,7 @@ import type {
 } from "@shardcode/shared";
 import { FileStorage } from "./storage.js";
 import { PermissionEngine } from "./permissions.js";
-import { ensureParent, globWorkspace, grepWorkspace, inputRecord, listWorkspaceFiles, requiredString, TOOL_DEFINITIONS } from "./tools.js";
+import { ensureParent, globWorkspace, grepWorkspace, inputRecord, listWorkspaceFiles, requiredString, stringValue, TOOL_DEFINITIONS } from "./tools.js";
 import { quoteShell, resolveWorkspacePath } from "./paths.js";
 
 export interface ToolRuntimeOptions {
@@ -98,15 +98,15 @@ export class ToolRuntime implements ToolInvoker {
       }
       case "write_file": {
         const target = this.path(requiredString(input, "path"));
-        const content = requiredString(input, "content");
+        const content = stringValue(input, "content");
         await ensureParent(target);
         await import("node:fs/promises").then(({ writeFile }) => writeFile(target, content, "utf8"));
         return this.completed(call, `wrote ${input.path}`);
       }
       case "edit_file": {
         const target = this.path(requiredString(input, "path"));
-        const oldText = requiredString(input, "oldText");
-        const newText = requiredString(input, "newText");
+        const oldText = stringValue(input, "oldText");
+        const newText = stringValue(input, "newText");
         const content = await readFile(target, "utf8");
         if (!content.includes(oldText)) throw new Error("oldText was not found in the file");
         await import("node:fs/promises").then(({ writeFile }) => writeFile(target, content.replace(oldText, newText), "utf8"));

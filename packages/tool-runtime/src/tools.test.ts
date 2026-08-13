@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createProcessSandbox } from "@shardcode/sandbox";
 import { ToolRuntime } from "./runtime.js";
+import { FileStorage } from "./storage.js";
 
 async function workspace(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "shardcode-tools-"));
@@ -55,5 +56,16 @@ describe("repository tools", () => {
     const result = await runtime.execute({ id: "secret-1", name: "write_file", input: { path: ".env", content: "SECRET=x" } });
     expect(result.status).toBe("denied");
     expect(result.error?.code).toBe("PERMISSION_DENIED");
+  });
+
+  it("allows an empty file and keeps internal storage inside its root", async () => {
+    const root = await workspace();
+    const runtime = new ToolRuntime({ workspaceRoot: root, mode: "acceptEdits" });
+    const result = await runtime.execute({ id: "empty-1", name: "write_file", input: { path: "empty.txt", content: "" } });
+
+    expect(result.status).toBe("completed");
+    await expect(readFile(join(root, "empty.txt"), "utf8")).resolves.toBe("");
+    const storage = new FileStorage(join(root, ".shardcode"));
+    await expect(storage.write("../escape.txt", "bad")).rejects.toThrow("escapes root");
   });
 });
