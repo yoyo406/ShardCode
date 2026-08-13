@@ -53,7 +53,7 @@ export function createGeminiProvider(config: ProviderConfig): ModelProvider {
     config.baseUrl ??
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.model)}:generateContent`;
   return {
-    id: "gemini",
+    id: config.provider,
     model: config.model,
     async complete(request: ModelRequest): Promise<ModelResponse> {
       const body: Record<string, unknown> = {

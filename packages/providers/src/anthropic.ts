@@ -47,7 +47,7 @@ export function createAnthropicProvider(config: ProviderConfig): ModelProvider {
   const fetcher = getFetch(config);
   const endpoint = config.baseUrl ?? "https://api.anthropic.com/v1/messages";
   return {
-    id: "anthropic",
+    id: config.provider,
     model: config.model,
     async complete(request: ModelRequest): Promise<ModelResponse> {
       const body: Record<string, unknown> = {
@@ -68,7 +68,9 @@ export function createAnthropicProvider(config: ProviderConfig): ModelProvider {
         {
           method: "POST",
           headers: requestHeaders({
-            "x-api-key": apiKey,
+            ...(config.provider === "anthropic" || config.provider === "anthropic-claude"
+              ? { "x-api-key": apiKey }
+              : { Authorization: `Bearer ${apiKey}` }),
             "anthropic-version": "2023-06-01"
           }),
           body: JSON.stringify(body)
