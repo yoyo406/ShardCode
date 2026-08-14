@@ -152,6 +152,23 @@ describe("interactive TUI", () => {
     expect(outputLine?.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")).toHaveLength(4_000);
   });
 
+  it("closes an unterminated trusted foreground style before writing it", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+    const styledOutput = "\u001b[31mleak";
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onStyledOutput?.(styledOutput);
+        return { exitCode: 0 };
+      }
+    })).resolves.toBe(0);
+
+    expect(terminal.output.filter((line) => line.includes("leak"))).toEqual(["\u001b[31mleak\u001b[39m"]);
+  });
+
   it("sanitizes hostile live execution output before writing it", async () => {
     const terminal = fakeTerminal(["Run the checks", "/exit"]);
 

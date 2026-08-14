@@ -171,11 +171,13 @@ function sanitizeUntrustedOutput(value: string): string {
 function sanitizeTrustedStyledOutput(value: string): string {
   let result = "";
   let index = 0;
+  let foregroundStyleOpen = false;
   while (index < value.length) {
     const trustedSgr = matchAt(TRUSTED_SGR, value, index);
     if (trustedSgr) {
       result += trustedSgr;
       index += trustedSgr.length;
+      foregroundStyleOpen = trustedSgr !== "\u001b[39m";
       continue;
     }
     const escape = matchAt(ANSI_OSC, value, index)
@@ -201,7 +203,7 @@ function sanitizeTrustedStyledOutput(value: string): string {
     result += character;
     index += character.length;
   }
-  return result;
+  return foregroundStyleOpen ? `${result}\u001b[39m` : result;
 }
 
 function truncateHistoryLine(value: string): string {
