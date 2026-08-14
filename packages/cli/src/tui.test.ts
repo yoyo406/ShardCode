@@ -115,7 +115,7 @@ describe("interactive TUI", () => {
   });
 
   it("renders topic-specific help and a complete generic command list", async () => {
-    const terminal = fakeTerminal(["/help model", "/help", "/exit"]);
+    const terminal = fakeTerminal(["/help model", "/help", "/help quit", "/exit"]);
 
     await expect(runInteractiveTui({
       terminal,
@@ -125,6 +125,7 @@ describe("interactive TUI", () => {
     })).resolves.toBe(0);
 
     expect(terminal.output).toContain("/model [model] — show the active provider/model (read-only)");
+    expect(terminal.output).toContain("/exit or /quit — leave the interactive TUI");
     expect(terminal.output.some((line) => line.includes("/exit") && line.includes("/quit"))).toBe(true);
   });
 
@@ -139,13 +140,53 @@ describe("interactive TUI", () => {
       terminal,
       workspaceRoot: "/repo",
       info,
-      execute: async () => ({ exitCode: 0, output: [longStyledLine] })
+      execute: async (_request, callbacks) => {
+        callbacks?.onStyledOutput?.(longStyledLine);
+        return { exitCode: 0 };
+      }
     })).resolves.toBe(0);
 
     const outputLine = terminal.output.find((line) => line.startsWith(prefix) && line.length >= 4_000);
     expect(outputLine).toBeDefined();
     expect(outputLine).toMatch(/\u001b\[39m$/);
     expect(outputLine?.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")).toHaveLength(4_000);
+  });
+
+  it("sanitizes hostile live execution output before writing it", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onOutput?.("live\u001b[2Jclear\u009b2Jc1\tfield\nnext");
+        return { exitCode: 0 };
+      }
+    })).resolves.toBe(0);
+
+    const output = terminal.output.join("");
+    expect(output).not.toContain("\u001b[2J");
+    expect(output).not.toContain("\u009b2J");
+    expect(output).not.toContain("\t");
+    expect(terminal.output.some((line) => line.includes("liveclearc1 field next"))).toBe(true);
+  });
+
+  it("sanitizes hostile legacy execution output before writing it", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async () => ({ exitCode: 0, output: ["legacy\u001b[2Jclear\u009b2Jc1\tfield\nnext"] })
+    })).resolves.toBe(0);
+
+    const output = terminal.output.join("");
+    expect(output).not.toContain("\u001b[2J");
+    expect(output).not.toContain("\u009b2J");
+    expect(output).not.toContain("\t");
+    expect(terminal.output.some((line) => line.includes("legacyclearc1 field next"))).toBe(true);
   });
 
   it("shows live output and the running footer before execution completes", async () => {
@@ -311,7 +352,10 @@ describe("interactive TUI", () => {
       terminal,
       workspaceRoot: "/repo",
       info,
-      execute: async () => ({ exitCode: 0, output: eventLines })
+      execute: async (_request, callbacks) => {
+        for (const eventLine of eventLines) callbacks?.onStyledOutput?.(eventLine);
+        return { exitCode: 0 };
+      }
     })).resolves.toBe(0);
 
     const output = streams.outputText();

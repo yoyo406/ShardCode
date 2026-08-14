@@ -10,6 +10,7 @@ import { renderEvent, sanitizeTerminalText } from "./render.js";
 import {
   createDefaultTuiTerminal,
   runInteractiveTui,
+  type InteractiveTaskCallbacks,
   type InteractiveTaskRequest,
   type InteractiveTaskResult,
   type TuiTerminal
@@ -128,7 +129,7 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
     });
     const sessionStore = new JsonSessionStore(toolRuntime.storage());
 
-    const executeTask = async (request: InteractiveTaskRequest, callbacks?: { onOutput?: (line: string) => void }): Promise<InteractiveTaskResult> => {
+    const executeTask = async (request: InteractiveTaskRequest, callbacks?: InteractiveTaskCallbacks): Promise<InteractiveTaskResult> => {
       let providerOptions = options;
       if (request.kind === "resume" && !options.providerExplicit) {
         const existing = await sessionStore.load(request.sessionId);
@@ -141,7 +142,7 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
           };
         }
       }
-      const taskIO = tui && callbacks?.onOutput ? createTuiExecutionIO(callbacks.onOutput) : undefined;
+      const taskIO = tui && callbacks?.onStyledOutput ? createTuiExecutionIO(callbacks.onStyledOutput) : undefined;
       const runtime = new AgentRuntime({
         provider: buildProvider(providerOptions, io.env),
         tools: toolRuntime,

@@ -8,6 +8,7 @@ describe("interactive input", () => {
       prompt: "Inspect the repo"
     });
     expect(parseInteractiveInput("/quit")).toEqual({ kind: "command", command: { name: "exit" } });
+    expect(parseInteractiveInput("/help quit")).toEqual({ kind: "command", command: { name: "help", topic: "exit" } });
     expect(parseInteractiveInput("/connect")).toEqual({ kind: "command", command: { name: "connect" } });
   });
 

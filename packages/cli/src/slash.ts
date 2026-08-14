@@ -42,8 +42,10 @@ export function parseInteractiveInput(input: string): InteractiveInput {
 
   switch (name as SlashCommandName) {
     case "help": {
-      if (parts.length > 1 || (parts[0] && !HELP_TOPICS.has(parts[0].toLowerCase() as SlashCommandName))) return invalid("invalid help topic");
-      return { kind: "command", command: { name: "help", ...(parts[0] ? { topic: parts[0].toLowerCase() as SlashCommandName } : {}) } };
+      const requestedTopic = parts[0]?.toLowerCase();
+      const topic = requestedTopic === "quit" ? "exit" : requestedTopic;
+      if (parts.length > 1 || (topic && !HELP_TOPICS.has(topic as SlashCommandName))) return invalid("invalid help topic");
+      return { kind: "command", command: { name: "help", ...(topic ? { topic: topic as SlashCommandName } : {}) } };
     }
     case "model":
       return parts.length <= 1 ? { kind: "command", command: { name: "model", ...(parts[0] ? { model: parts[0] } : {}) } } : invalid("model accepts at most one argument");

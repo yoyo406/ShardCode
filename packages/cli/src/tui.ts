@@ -24,7 +24,15 @@ const HELP_DETAILS: Record<SlashCommandName, string> = {
   exit: "/exit or /quit — leave the interactive TUI"
 };
 
+const ANSI_COMPONENT = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+const TRUSTED_SGR = new RegExp(
+  `\\u001b\\[(?:38;2;${ANSI_COMPONENT};${ANSI_COMPONENT};${ANSI_COMPONENT}|38;5;${ANSI_COMPONENT}|3[0-7]|9[0-7]|39)m`,
+  "y"
+);
+const ANSI_OSC = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/y;
+const C1_OSC = /\u009d[^\u0007\u009c]*(?:\u0007|\u009c|\u001b\\)/y;
 const ANSI_CSI = /\u001b\[[0-?]*[ -/]*[@-~]/y;
+const C1_CSI = /\u009b[0-?]*[ -/]*[@-~]/y;
 
 export type TuiStyle = (text: string, tone: TuiTone) => string;
 
@@ -90,6 +98,7 @@ export interface InteractiveTaskResult {
 
 export interface InteractiveTaskCallbacks {
   onOutput?(line: string): void;
+  onStyledOutput?(line: string): void;
 }
 
 export interface InteractiveTuiOptions {
@@ -148,19 +157,65 @@ export function renderTuiFooter(
   ];
 }
 
+type HistoryOutputKind = "untrusted" | "trustedStyled";
+
+function matchAt(pattern: RegExp, value: string, index: number): string | undefined {
+  pattern.lastIndex = index;
+  return pattern.exec(value)?.[0];
+}
+
+function sanitizeUntrustedOutput(value: string): string {
+  return sanitizeTerminalText(value).replace(/[\n\t]/g, " ");
+}
+
+function sanitizeTrustedStyledOutput(value: string): string {
+  let result = "";
+  let index = 0;
+  while (index < value.length) {
+    const trustedSgr = matchAt(TRUSTED_SGR, value, index);
+    if (trustedSgr) {
+      result += trustedSgr;
+      index += trustedSgr.length;
+      continue;
+    }
+    const escape = matchAt(ANSI_OSC, value, index)
+      ?? matchAt(C1_OSC, value, index)
+      ?? matchAt(ANSI_CSI, value, index)
+      ?? matchAt(C1_CSI, value, index);
+    if (escape) {
+      index += escape.length;
+      continue;
+    }
+    const code = value.charCodeAt(index);
+    if (
+      value[index] === "\u001b"
+      || code === 0x7f
+      || (code >= 0x80 && code <= 0x9f)
+      || (code < 0x20 && value[index] !== "\n" && value[index] !== "\t")
+    ) {
+      index += 1;
+      continue;
+    }
+    const codePoint = value.codePointAt(index)!;
+    const character = String.fromCodePoint(codePoint);
+    result += character;
+    index += character.length;
+  }
+  return result;
+}
+
 function truncateHistoryLine(value: string): string {
   let result = "";
   let index = 0;
   let visibleCharacters = 0;
-  let hasAnsi = false;
+  let foregroundStyleOpen = false;
 
   while (index < value.length) {
-    ANSI_CSI.lastIndex = index;
-    const ansi = ANSI_CSI.exec(value)?.[0];
+    const ansi = matchAt(TRUSTED_SGR, value, index);
     if (ansi) {
       result += ansi;
       index += ansi.length;
-      hasAnsi = true;
+      foregroundStyleOpen = ansi !== "\u001b[39m";
       continue;
     }
     if (value[index] === "\u001b" || visibleCharacters >= MAX_HISTORY_LINE_LENGTH) break;
@@ -171,7 +226,7 @@ function truncateHistoryLine(value: string): string {
     visibleCharacters += 1;
   }
 
-  if (index < value.length && hasAnsi && !result.endsWith("\u001b[39m")) result += "\u001b[39m";
+  if (index < value.length && foregroundStyleOpen) result += "\u001b[39m";
   return result;
 }
 
@@ -198,10 +253,14 @@ function writeTuiErrorLine(terminal: TuiTerminal, line: string): void {
   }
 }
 
-function writeHistoryLine(terminal: TuiTerminal, history: string[], value: string): void {
-  appendHistory(history, value);
-  const lastLines = history.slice(-value.split("\n").length);
-  for (const historyLine of lastLines) writeTuiLine(terminal, historyLine);
+function writeHistoryLine(terminal: TuiTerminal, history: string[], value: string, kind: HistoryOutputKind): void {
+  const safeValue = kind === "trustedStyled" ? sanitizeTrustedStyledOutput(value) : sanitizeUntrustedOutput(value);
+  appendHistory(history, safeValue);
+  const lastLines = history.slice(-safeValue.split("\n").length);
+  for (const historyLine of lastLines) {
+    if (kind === "trustedStyled") writeTuiLine(terminal, historyLine);
+    else terminal.write(historyLine);
+  }
 }
 
 function writeSessionHeader(terminal: TuiTerminal, session: TuiSessionSnapshot | undefined): void {
@@ -236,11 +295,15 @@ async function runRequest(
     const result = await execute(request, {
       onOutput: (output) => {
         receivedLiveOutput = true;
-        writeHistoryLine(terminal, history, output);
+        writeHistoryLine(terminal, history, output, "untrusted");
+      },
+      onStyledOutput: (output) => {
+        receivedLiveOutput = true;
+        writeHistoryLine(terminal, history, output, "trustedStyled");
       }
     });
     if (!receivedLiveOutput) {
-      for (const output of result.output ?? []) writeHistoryLine(terminal, history, output);
+      for (const output of result.output ?? []) writeHistoryLine(terminal, history, output, "untrusted");
     }
     terminal.setStatus(result.session?.status ?? (result.exitCode === 0 ? "completed" : "failed"));
     return result;
