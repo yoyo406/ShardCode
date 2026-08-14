@@ -166,6 +166,8 @@ export function parseArgs(argv: string[]): CliOptions {
 export const HELP_TEXT = `ShardCode - autonomous coding CLI
 
 Usage:
+  shard [options]                         interactive TUI (no command)
+  shardcode [options]                     interactive TUI (no command)
   shardcode run "task description" [options]
   shardcode resume <session-id> [options]
 

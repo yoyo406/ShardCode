@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseArgs } from "./args.js";
+import { HELP_TEXT, parseArgs } from "./args.js";
 
 describe("CLI arguments", () => {
   it("parses a run task and execution controls", () => {
@@ -47,5 +47,11 @@ describe("CLI arguments", () => {
     });
     expect(parseArgs(["run", "Fix the tests"])).toMatchObject({ command: "run", prompt: "Fix the tests" });
     expect(parseArgs(["resume", "session-123"])).toMatchObject({ command: "resume", sessionId: "session-123" });
+  });
+
+  it("documents the no-argument interactive mode in help", () => {
+    expect(HELP_TEXT).toContain("shard [options]");
+    expect(HELP_TEXT).toContain("shardcode [options]");
+    expect(HELP_TEXT).toContain("interactive TUI");
   });
 });

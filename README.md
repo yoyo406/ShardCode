@@ -70,13 +70,16 @@ Direct execution remains available for scripts and automation:
 pnpm shard run "Implement the requested change"
 pnpm shard resume <session-id>
 pnpm shard run "Run the local smoke check" --provider scripted \
-  --permission-mode acceptEdits --json
+  --permission-mode bypass --isolated-environment --json
 ```
 
 The bare task form (`pnpm shard "task description"`) is also a direct run.
 `run` and `resume` retain their scriptable behavior. `--json` is a machine
 readable JSONL path without ANSI styling; it is not available in interactive
-mode.
+mode. `acceptEdits` still asks before shell execution, so it cannot be used for
+an unattended non-TTY smoke run: the default non-TTY permission response is
+refusal. The deterministic command above uses `bypass` only together with
+`--isolated-environment` for that controlled smoke path.
 
 The CLI defaults to permission mode `ask`. Read-only exploration is allowed;
 workspace edits and shell commands are shown for approval. `acceptEdits` allows
@@ -109,7 +112,7 @@ For a no-network smoke run, use the deterministic provider:
 
 ```bash
 pnpm shardcode run "Run the local smoke check" \
-  --provider scripted --permission-mode acceptEdits
+  --provider scripted --permission-mode bypass --isolated-environment
 ```
 
 ## Permissions and settings
