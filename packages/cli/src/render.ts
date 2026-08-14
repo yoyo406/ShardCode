@@ -24,27 +24,6 @@ export function sanitizeTerminalText(value: string): string {
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 }
 
-export function sanitizeTuiTerminalText(value: string, trustedStyles: ReadonlySet<string>): string {
-  const preservedStyles: string[] = [];
-  const styleToken = (index: number): string => `\uE000${index}\uE001`;
-  let safeValue = value.replace(/[\uE000-\uE001]/g, "");
-  safeValue = safeValue
-    .replace(ANSI_OSC, "")
-    .replace(C1_OSC, "")
-    .replace(ANSI_CSI, (sequence) => {
-      if (!trustedStyles.has(sequence)) return "";
-      const index = preservedStyles.push(sequence) - 1;
-      return styleToken(index);
-    })
-    .replace(ANSI_C1_CSI, "")
-    .replace(ANSI_SINGLE, "")
-    .replace(/\u001b/g, "")
-    .replace(/[\u0080-\u009f]/g, "")
-    .replace(/\r/g, "")
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
-  return safeValue.replace(/\uE000(\d+)\uE001/g, (_token, index: string) => preservedStyles[Number(index)] ?? "");
-}
-
 function text(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : value == null ? fallback : String(value);
 }

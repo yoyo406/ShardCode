@@ -59,17 +59,20 @@ function fakeTtyStreams(): {
   errorOutput: PassThrough;
   rawModes: boolean[];
   outputText: () => string;
+  errorText: () => string;
 } {
   const rawModes: boolean[] = [];
   const input = new PassThrough() as PassThrough & { isTTY: boolean; setRawMode(enabled: boolean): void };
   const output = new PassThrough() as PassThrough & { isTTY: boolean };
   const errorOutput = new PassThrough();
   let text = "";
+  let errorText = "";
   input.isTTY = true;
   input.setRawMode = (enabled) => { rawModes.push(enabled); };
   output.isTTY = true;
   output.on("data", (chunk: Buffer) => { text += chunk.toString(); });
-  return { input, output, errorOutput, rawModes, outputText: () => text };
+  errorOutput.on("data", (chunk: Buffer) => { errorText += chunk.toString(); });
+  return { input, output, errorOutput, rawModes, outputText: () => text, errorText: () => errorText };
 }
 
 describe("interactive TUI", () => {
@@ -167,6 +170,11 @@ describe("interactive TUI", () => {
     const inputs = ["Run the checks", "/exit"];
     terminal.question = async () => inputs.shift() ?? "/exit";
     const eventLines: string[] = [];
+
+    terminal.write("\u001b[39mraw-reset");
+    terminal.error("\u001b[39mraw-error-reset");
+    expect(streams.outputText()).toBe("raw-reset\n");
+    expect(streams.errorText()).toBe("raw-error-reset\n");
 
     renderEvent(
       createEvent("session-1", "ToolFailed", {

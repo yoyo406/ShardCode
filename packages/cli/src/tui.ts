@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { parseInteractiveInput, type SlashCommand } from "./slash.js";
-import { sanitizeTerminalText, sanitizeTuiTerminalText } from "./render.js";
+import { sanitizeTerminalText } from "./render.js";
 import { detectTuiCapabilities, styleTuiText, type TuiTone } from "./theme.js";
 
 const MAX_HISTORY_LINES = 200;
@@ -26,7 +26,8 @@ export interface TuiTerminal {
   finish(exitCode: number): void;
   close(): void;
   style?: TuiStyle;
-  sanitize?(line: string): string;
+  writeStyled?(line: string): void;
+  writeStyledError?(line: string): void;
 }
 
 interface DefaultTuiTerminal extends TuiTerminal {
@@ -132,19 +133,34 @@ function appendHistory(history: string[], value: string): void {
   if (history.length > MAX_HISTORY_LINES) history.splice(0, history.length - MAX_HISTORY_LINES);
 }
 
+function writeTuiLine(terminal: TuiTerminal, line: string): void {
+  if (terminal.writeStyled) {
+    terminal.writeStyled(line);
+  } else {
+    terminal.write(line);
+  }
+}
+
+function writeTuiErrorLine(terminal: TuiTerminal, line: string): void {
+  if (terminal.writeStyledError) {
+    terminal.writeStyledError(line);
+  } else {
+    terminal.error(line);
+  }
+}
+
 function writeHistoryLine(terminal: TuiTerminal, history: string[], value: string): void {
-  const safeValue = terminal.sanitize ? terminal.sanitize(value) : sanitizeTerminalText(value);
-  appendHistory(history, safeValue);
-  const lastLines = history.slice(-safeValue.split("\n").length);
-  for (const historyLine of lastLines) terminal.write(historyLine);
+  appendHistory(history, value);
+  const lastLines = history.slice(-value.split("\n").length);
+  for (const historyLine of lastLines) writeTuiLine(terminal, historyLine);
 }
 
 function writeSessionHeader(terminal: TuiTerminal, session: TuiSessionSnapshot | undefined): void {
-  if (session?.sessionId) terminal.write(paint(`Session ${session.sessionId}`, "primary", terminal.style));
+  if (session?.sessionId) writeTuiLine(terminal, paint(`Session ${session.sessionId}`, "primary", terminal.style));
 }
 
 function writeHelp(terminal: TuiTerminal): void {
-  terminal.write(paint("/help /clear /status /model /permissions /resume <id> /connect /exit", "normal", terminal.style));
+  writeTuiLine(terminal, paint("/help /clear /status /model /permissions /resume <id> /connect /exit", "normal", terminal.style));
 }
 
 function writeCommandStatus(
@@ -154,7 +170,7 @@ function writeCommandStatus(
   session: TuiSessionSnapshot | undefined,
   status: string
 ): void {
-  for (const footerLine of renderTuiFooter(workspaceRoot, info, session, status, terminal.style)) terminal.write(footerLine);
+  for (const footerLine of renderTuiFooter(workspaceRoot, info, session, status, terminal.style)) writeTuiLine(terminal, footerLine);
 }
 
 async function runRequest(
@@ -194,7 +210,7 @@ async function handleCommand(
     case "clear":
       history.length = 0;
       terminal.clear();
-      for (const welcomeLine of renderTuiWelcome(workspaceRoot, state.info, SUGGESTIONS[state.suggestionIndex]!, terminal.style)) terminal.write(welcomeLine);
+      for (const welcomeLine of renderTuiWelcome(workspaceRoot, state.info, SUGGESTIONS[state.suggestionIndex]!, terminal.style)) writeTuiLine(terminal, welcomeLine);
       writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
       return false;
     case "status":
@@ -202,25 +218,25 @@ async function handleCommand(
       return false;
     case "model":
       if (command.model) {
-        terminal.write(paint(`Model remains ${state.info.provider} / ${state.info.model} for this session.`, "warning", terminal.style));
+        writeTuiLine(terminal, paint(`Model remains ${state.info.provider} / ${state.info.model} for this session.`, "warning", terminal.style));
       } else {
-        terminal.write(line("Model:", `${state.info.provider} / ${state.info.model}`, "accent", terminal.style));
+        writeTuiLine(terminal, line("Model:", `${state.info.provider} / ${state.info.model}`, "accent", terminal.style));
       }
       return false;
     case "permissions":
       if (command.mode) {
-        terminal.write(paint(`Permissions remain ${state.info.permissionMode} for this session.`, "warning", terminal.style));
+        writeTuiLine(terminal, paint(`Permissions remain ${state.info.permissionMode} for this session.`, "warning", terminal.style));
       } else {
-        terminal.write(line("Permissions:", state.info.permissionMode, "warning", terminal.style));
+        writeTuiLine(terminal, line("Permissions:", state.info.permissionMode, "warning", terminal.style));
       }
       return false;
     case "connect":
       if (!options.connect) {
-        terminal.write(paint("Connection is not available in this build.", "warning", terminal.style));
+        writeTuiLine(terminal, paint("Connection is not available in this build.", "warning", terminal.style));
         return false;
       }
       await options.connect();
-      terminal.write(paint("Connection updated.", "success", terminal.style));
+      writeTuiLine(terminal, paint("Connection updated.", "success", terminal.style));
       return false;
     case "resume": {
       const result = await runRequest(terminal, { kind: "resume", sessionId: command.sessionId }, options.execute, history);
@@ -254,14 +270,14 @@ export async function runInteractiveTui(options: InteractiveTuiOptions): Promise
   try {
     await terminal.open();
     terminal.setStatus(state.status);
-    for (const welcomeLine of renderTuiWelcome(workspaceRoot, state.info, SUGGESTIONS[state.suggestionIndex]!, terminal.style)) terminal.write(welcomeLine);
+    for (const welcomeLine of renderTuiWelcome(workspaceRoot, state.info, SUGGESTIONS[state.suggestionIndex]!, terminal.style)) writeTuiLine(terminal, welcomeLine);
     writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
 
     for (;;) {
       const input = await terminal.question(paint("› ", "primary", terminal.style));
       const parsed = parseInteractiveInput(input);
       if (parsed.kind === "invalid") {
-        terminal.error(paint(parsed.message, "error", terminal.style));
+        writeTuiErrorLine(terminal, paint(parsed.message, "error", terminal.style));
         continue;
       }
       if (parsed.kind === "command") {
@@ -302,12 +318,6 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
   const capabilities = detectTuiCapabilities(Boolean(input.isTTY), options.env ?? process.env);
   const pendingLines: string[] = [];
   const style: TuiStyle = (text, tone) => styleTuiText(text, tone, capabilities);
-  const trustedStyles = new Set<string>(["\u001b[39m"]);
-  for (const tone of ["normal", "primary", "accent", "success", "warning", "error", "info"] as const) {
-    const probe = styleTuiText("x", tone, capabilities);
-    const suffix = "x\u001b[39m";
-    if (probe.endsWith(suffix)) trustedStyles.add(probe.slice(0, -suffix.length));
-  }
   let cancelActiveSecret: (() => void) | undefined;
   const normalQuestion = async (prompt: string): Promise<string> => {
     const pending = pendingLines.shift();
@@ -318,7 +328,6 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
   return {
     isTTY: Boolean(input.isTTY && output.isTTY),
     style,
-    sanitize: (value) => sanitizeTuiTerminalText(value, trustedStyles),
     open: async () => undefined,
     question: normalQuestion,
     confirm: async (prompt) => /^(y|yes|o|oui)$/i.test(
@@ -372,8 +381,10 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
         input.on("data", onData);
       });
     },
-    write: (value) => output.write(`${sanitizeTuiTerminalText(value, trustedStyles)}\n`),
-    error: (value) => errorOutput.write(`${sanitizeTuiTerminalText(value, trustedStyles)}\n`),
+    write: (value) => output.write(`${sanitizeTerminalText(value)}\n`),
+    error: (value) => errorOutput.write(`${sanitizeTerminalText(value)}\n`),
+    writeStyled: (value) => output.write(`${value}\n`),
+    writeStyledError: (value) => errorOutput.write(`${value}\n`),
     clear: () => output.write("\u001b[2J\u001b[H"),
     setStatus: () => undefined,
     finish: () => undefined,
