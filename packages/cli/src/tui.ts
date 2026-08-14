@@ -29,6 +29,7 @@ const TRUSTED_SGR = new RegExp(
   `\\u001b\\[(?:38;2;${ANSI_COMPONENT};${ANSI_COMPONENT};${ANSI_COMPONENT}|38;5;${ANSI_COMPONENT}|3[0-7]|9[0-7]|39)m`,
   "y"
 );
+const FOREGROUND_RESET = "\u001b[39m";
 const ANSI_OSC = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/y;
 const C1_OSC = /\u009d[^\u0007\u009c]*(?:\u0007|\u009c|\u001b\\)/y;
 const ANSI_CSI = /\u001b\[[0-?]*[ -/]*[@-~]/y;
@@ -168,16 +169,43 @@ function sanitizeUntrustedOutput(value: string): string {
   return sanitizeTerminalText(value).replace(/[\n\t]/g, " ");
 }
 
+function incompleteCsiLength(value: string, index: number, prefixLength: number): number | undefined {
+  let cursor = index + prefixLength;
+  while (cursor < value.length) {
+    const code = value.charCodeAt(cursor);
+    if ((code >= 0x30 && code <= 0x3f) || (code >= 0x20 && code <= 0x2f)) {
+      cursor += 1;
+      continue;
+    }
+    if (code >= 0x40 && code <= 0x7e) return undefined;
+    break;
+  }
+  return cursor - index;
+}
+
+function incompleteEscapeLength(value: string, index: number): number | undefined {
+  if (value[index] === "\u001b") {
+    if (value[index + 1] === "]") return value.length - index;
+    if (value[index + 1] === "[") return incompleteCsiLength(value, index, 2);
+    return 1;
+  }
+  if (value[index] === "\u009d") return value.length - index;
+  if (value[index] === "\u009b") return incompleteCsiLength(value, index, 1);
+  return undefined;
+}
+
 function sanitizeTrustedStyledOutput(value: string): string {
   let result = "";
   let index = 0;
-  let foregroundStyleOpen = false;
+  let foregroundStyle: string | undefined;
+  let pendingReopen: string | undefined;
   while (index < value.length) {
     const trustedSgr = matchAt(TRUSTED_SGR, value, index);
     if (trustedSgr) {
       result += trustedSgr;
       index += trustedSgr.length;
-      foregroundStyleOpen = trustedSgr !== "\u001b[39m";
+      foregroundStyle = trustedSgr === FOREGROUND_RESET ? undefined : trustedSgr;
+      pendingReopen = undefined;
       continue;
     }
     const escape = matchAt(ANSI_OSC, value, index)
@@ -188,22 +216,41 @@ function sanitizeTrustedStyledOutput(value: string): string {
       index += escape.length;
       continue;
     }
+    const incompleteEscape = incompleteEscapeLength(value, index);
+    if (incompleteEscape !== undefined) {
+      index += incompleteEscape;
+      continue;
+    }
+    if (value[index] === "\n") {
+      if (foregroundStyle) {
+        result += FOREGROUND_RESET;
+        pendingReopen = foregroundStyle;
+        foregroundStyle = undefined;
+      }
+      result += "\n";
+      index += 1;
+      continue;
+    }
     const code = value.charCodeAt(index);
     if (
-      value[index] === "\u001b"
-      || code === 0x7f
+      code === 0x7f
       || (code >= 0x80 && code <= 0x9f)
       || (code < 0x20 && value[index] !== "\n" && value[index] !== "\t")
     ) {
       index += 1;
       continue;
     }
+    if (pendingReopen) {
+      result += pendingReopen;
+      foregroundStyle = pendingReopen;
+      pendingReopen = undefined;
+    }
     const codePoint = value.codePointAt(index)!;
     const character = String.fromCodePoint(codePoint);
     result += character;
     index += character.length;
   }
-  return foregroundStyleOpen ? `${result}\u001b[39m` : result;
+  return foregroundStyle ? `${result}${FOREGROUND_RESET}` : result;
 }
 
 function truncateHistoryLine(value: string): string {
@@ -217,7 +264,7 @@ function truncateHistoryLine(value: string): string {
     if (ansi) {
       result += ansi;
       index += ansi.length;
-      foregroundStyleOpen = ansi !== "\u001b[39m";
+      foregroundStyleOpen = ansi !== FOREGROUND_RESET;
       continue;
     }
     if (value[index] === "\u001b" || visibleCharacters >= MAX_HISTORY_LINE_LENGTH) break;
@@ -228,7 +275,7 @@ function truncateHistoryLine(value: string): string {
     visibleCharacters += 1;
   }
 
-  if (index < value.length && foregroundStyleOpen) result += "\u001b[39m";
+  if (index < value.length && foregroundStyleOpen) result += FOREGROUND_RESET;
   return result;
 }
 

@@ -169,6 +169,41 @@ describe("interactive TUI", () => {
     expect(terminal.output.filter((line) => line.includes("leak"))).toEqual(["\u001b[31mleak\u001b[39m"]);
   });
 
+  it("closes and reopens trusted foreground styles around physical newlines", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onStyledOutput?.("\u001b[31mfirst\nsecond");
+        return { exitCode: 0 };
+      }
+    })).resolves.toBe(0);
+
+    const styledLines = terminal.output.filter((line) => line.includes("first") || line.includes("second"));
+    expect(styledLines).toEqual(["\u001b[31mfirst\u001b[39m", "\u001b[31msecond\u001b[39m"]);
+    expect(styledLines.every((line) => line.endsWith("\u001b[39m"))).toBe(true);
+    expect(styledLines.every((line) => line.match(/\u001b\[39m/g)?.length === 1)).toBe(true);
+  });
+
+  it("consumes incomplete trusted CSI prefixes without exposing their suffix", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onStyledOutput?.("before\u001b[31");
+        return { exitCode: 0 };
+      }
+    })).resolves.toBe(0);
+
+    expect(terminal.output.filter((line) => line.includes("before"))).toEqual(["before"]);
+  });
+
   it("sanitizes hostile live execution output before writing it", async () => {
     const terminal = fakeTerminal(["Run the checks", "/exit"]);
 
@@ -377,7 +412,7 @@ describe("interactive TUI", () => {
 
     const output = streams.outputText();
     expect(output).toContain("\u001b[38;2;250;178;131mShardCode\u001b[39m");
-    expect(output).toContain("\u001b[38;2;224;108;117mÉchec : rm -rf\nfailed\u001b[39m");
+    expect(output).toContain("\u001b[38;2;224;108;117mÉchec : rm -rf\u001b[39m\n\u001b[38;2;224;108;117mfailed\u001b[39m");
     expect(output).not.toContain("\u001b[31m");
     terminal.close();
   });
