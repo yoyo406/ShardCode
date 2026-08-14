@@ -1,5 +1,7 @@
+import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
+  createDefaultTuiTerminal,
   renderTuiFooter,
   renderTuiWelcome,
   runInteractiveTui,
@@ -47,6 +49,25 @@ function fakeTerminal(inputs: string[], isTTY = true): TuiTerminal & {
     close: () => { value.closed += 1; }
   };
   return value;
+}
+
+function fakeTtyStreams(): {
+  input: PassThrough & { isTTY: boolean; setRawMode(enabled: boolean): void };
+  output: PassThrough & { isTTY: boolean };
+  errorOutput: PassThrough;
+  rawModes: boolean[];
+  outputText: () => string;
+} {
+  const rawModes: boolean[] = [];
+  const input = new PassThrough() as PassThrough & { isTTY: boolean; setRawMode(enabled: boolean): void };
+  const output = new PassThrough() as PassThrough & { isTTY: boolean };
+  const errorOutput = new PassThrough();
+  let text = "";
+  input.isTTY = true;
+  input.setRawMode = (enabled) => { rawModes.push(enabled); };
+  output.isTTY = true;
+  output.on("data", (chunk: Buffer) => { text += chunk.toString(); });
+  return { input, output, errorOutput, rawModes, outputText: () => text };
 }
 
 describe("interactive TUI", () => {
@@ -107,5 +128,35 @@ describe("interactive TUI", () => {
   it("preserves lines pasted after a masked secret", () => {
     expect(secretInputRemainder("secret-key\r\n1\n/exit\n")).toEqual(["1", "/exit"]);
     expect(secretInputRemainder("secret-key")).toBeUndefined();
+  });
+
+  it("masks raw secret input and queues pasted lines without echoing the secret", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+
+    const secret = terminal.secret("Token: ");
+    streams.input.write("secret-key\r\n1\n/exit\n");
+
+    await expect(secret).resolves.toBe("secret-key");
+    expect(streams.rawModes).toEqual([true, false]);
+    expect(streams.outputText()).toContain("**********");
+    expect(streams.outputText()).not.toContain("secret-key");
+    await expect(terminal.question("> ")).resolves.toBe("1");
+    await expect(terminal.question("> ")).resolves.toBe("/exit");
+    terminal.close();
+  });
+
+  it("restores raw mode when secret input is cancelled or the terminal closes", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+
+    const cancelled = terminal.secret("Token: ");
+    streams.input.write("\u0003");
+    await expect(cancelled).resolves.toBeUndefined();
+
+    const closing = terminal.secret("Token: ");
+    terminal.close();
+    await expect(closing).resolves.toBeUndefined();
+    expect(streams.rawModes).toEqual([true, false, true, false]);
   });
 });

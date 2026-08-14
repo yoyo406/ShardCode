@@ -32,6 +32,21 @@ interface DefaultTuiTerminal extends TuiTerminal {
   secret(prompt: string): Promise<string | undefined>;
 }
 
+type TuiInputStream = NodeJS.ReadableStream & {
+  isTTY?: boolean;
+  setRawMode?(enabled: boolean): void;
+  resume(): void;
+};
+
+type TuiOutputStream = NodeJS.WritableStream & { isTTY?: boolean };
+
+export interface DefaultTuiTerminalOptions {
+  input?: TuiInputStream;
+  output?: TuiOutputStream;
+  errorOutput?: NodeJS.WritableStream;
+  env?: Record<string, string | undefined>;
+}
+
 export interface TuiRuntimeInfo {
   permissionMode: string;
   provider: string;
@@ -271,19 +286,22 @@ export function secretInputRemainder(value: string): string[] | undefined {
   return lines;
 }
 
-export function createDefaultTuiTerminal(): DefaultTuiTerminal {
-  const input = process.stdin;
-  const output = process.stdout;
-  const errorOutput = process.stderr;
-  const readline = createInterface({ input, output, terminal: Boolean(input.isTTY) });
-  const capabilities = detectTuiCapabilities(Boolean(input.isTTY), process.env);
+export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}): DefaultTuiTerminal {
+  const input = options.input ?? process.stdin;
+  const output = options.output ?? process.stdout;
+  const errorOutput = options.errorOutput ?? process.stderr;
+  const readline = createInterface({ input, output, terminal: false });
+  const capabilities = detectTuiCapabilities(Boolean(input.isTTY), options.env ?? process.env);
   const pendingLines: string[] = [];
   const style: TuiStyle = (text, tone) => styleTuiText(text, tone, capabilities);
+  let cancelActiveSecret: (() => void) | undefined;
   const normalQuestion = async (prompt: string): Promise<string> => {
     const pending = pendingLines.shift();
-    return pending === undefined ? readline.question(prompt) : pending;
+    if (pending !== undefined) return pending;
+    output.write(prompt);
+    return readline.question("");
   };
-  const write = (stream: NodeJS.WriteStream, value: string): void => {
+  const write = (stream: NodeJS.WritableStream, value: string): void => {
     stream.write(`${sanitizeTerminalText(value)}\n`);
   };
 
@@ -294,8 +312,7 @@ export function createDefaultTuiTerminal(): DefaultTuiTerminal {
     question: normalQuestion,
     confirm: async (prompt) => /^(y|yes|o|oui)$/i.test((await normalQuestion(`${prompt} [y/N] `)).trim()),
     secret: async (prompt) => {
-      const rawInput = input as typeof input & { setRawMode?: (enabled: boolean) => void };
-      if (!rawInput.isTTY || typeof rawInput.setRawMode !== "function") return normalQuestion(prompt);
+      if (!input.isTTY || typeof input.setRawMode !== "function") return normalQuestion(prompt);
 
       output.write(prompt);
       return new Promise<string | undefined>((resolve) => {
@@ -304,8 +321,9 @@ export function createDefaultTuiTerminal(): DefaultTuiTerminal {
         const restore = (value: string | undefined, remainder?: string[]): void => {
           if (complete) return;
           complete = true;
-          rawInput.removeListener("data", onData);
-          rawInput.setRawMode!(false);
+          input.removeListener("data", onData);
+          input.setRawMode!(false);
+          cancelActiveSecret = undefined;
           if (remainder) pendingLines.push(...remainder);
           resolve(value);
         };
@@ -334,9 +352,11 @@ export function createDefaultTuiTerminal(): DefaultTuiTerminal {
             output.write("*");
           }
         };
-        rawInput.setRawMode!(true);
-        rawInput.resume();
-        rawInput.on("data", onData);
+        cancelActiveSecret?.();
+        cancelActiveSecret = () => restore(undefined);
+        input.setRawMode!(true);
+        input.resume();
+        input.on("data", onData);
       });
     },
     write: (value) => write(output, value),
@@ -344,6 +364,9 @@ export function createDefaultTuiTerminal(): DefaultTuiTerminal {
     clear: () => output.write("\u001b[2J\u001b[H"),
     setStatus: () => undefined,
     finish: () => undefined,
-    close: () => readline.close()
+    close: () => {
+      cancelActiveSecret?.();
+      readline.close();
+    }
   };
 }
