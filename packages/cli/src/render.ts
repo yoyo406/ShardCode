@@ -1,38 +1,147 @@
 import type { ShardCodeEvent } from "@shardcode/shared";
+import type { TuiTone } from "./theme.js";
 
-export function renderEvent(event: ShardCodeEvent, write: (line: string) => void, json: boolean): void {
+export interface RenderOptions {
+  style?: (text: string, tone: TuiTone) => string;
+}
+
+const ANSI_OSC = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g;
+const ANSI_CSI = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+const ANSI_C1_CSI = /\u009b[0-?]*[ -/]*[@-~]/g;
+const ANSI_SINGLE = /\u001b[@-_]/g;
+
+export function sanitizeTerminalText(value: string): string {
+  return value
+    .replace(ANSI_OSC, "")
+    .replace(ANSI_CSI, "")
+    .replace(ANSI_C1_CSI, "")
+    .replace(ANSI_SINGLE, "")
+    .replace(/\u001b/g, "")
+    .replace(/\r/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+}
+
+function text(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : value == null ? fallback : String(value);
+}
+
+function field(data: Record<string, unknown>, name: string, fallback = ""): string {
+  return text(data[name], fallback);
+}
+
+function nested(data: Record<string, unknown>, name: string): Record<string, unknown> {
+  const value = data[name];
+  return value !== null && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function humanLine(line: string, tone: TuiTone, options?: RenderOptions): string {
+  const safeLine = sanitizeTerminalText(line);
+  return options?.style?.(safeLine, tone) ?? safeLine;
+}
+
+export function renderEvent(
+  event: ShardCodeEvent,
+  write: (line: string) => void,
+  json: boolean,
+  options?: RenderOptions
+): void {
   if (json) {
     write(JSON.stringify(event));
     return;
   }
+
   const data = event.data;
+  const call = nested(data, "call");
+  const result = nested(data, "result");
+  const status = field(data, "status", "completed");
+  let line: string;
+  let tone: TuiTone;
+
   switch (event.type) {
     case "SessionStarted":
-      write(`[session] started ${event.sessionId}`);
+      line = `[session] started ${event.sessionId}`;
+      tone = "primary";
+      break;
+    case "AgentStarted":
+      line = `[agent] started ${field(data, "provider", "ShardCode")} ${field(data, "model")}`.trim();
+      tone = "info";
+      break;
+    case "ModelRequestStarted":
+      line = `[model] request (turn ${field(data, "turn", "0")})`;
+      tone = "info";
       break;
     case "ModelResponseReceived":
-      write(`[model] response (${String(data.toolCallCount ?? 0)} tool call(s))`);
+      line = `[model] response (${field(data, "toolCallCount", "0")} tool call(s))`;
+      tone = "info";
       break;
     case "ToolRequested":
-      write(`[tool] requested ${String((data.call as { name?: unknown } | undefined)?.name ?? "unknown")}`);
+      line = `[tool] requested ${field(call, "name", "unknown")}`;
+      tone = "accent";
+      break;
+    case "ToolStarted":
+      line = `[tool] started ${field(data, "toolName", "unknown")}`;
+      tone = "accent";
       break;
     case "ToolCompleted":
-      write(`[tool] completed ${String(data.executionId ?? "")}`);
+      line = `[tool] completed ${field(data, "executionId")}`;
+      tone = "success";
       break;
-    case "ToolFailed":
-      write(`[tool] failed: ${String((data.result as { output?: unknown } | undefined)?.output ?? "unknown error")}`);
+    case "ToolFailed": {
+      const permission = nested(result, "permission");
+      line = result.status === "denied"
+        ? `[permission] denied ${field(call, "name", field(result, "toolName", "unknown"))}: ${field(permission, "reason", "permission required")}`
+        : `Échec : ${field(result, "output", field(nested(result, "error"), "message", "unknown error"))}`;
+      tone = result.status === "denied" ? "warning" : "error";
       break;
-    case "BudgetExceeded":
-    case "ThrashingDetected":
-      write(`[runtime] ${event.type}: ${String(data.message ?? "")}`);
+    }
+    case "ContextUpdated":
+      line = `[context] updated (${field(data, "fileCount", "0")} file(s), ${field(data, "matchCount", "0")} match(es))`;
+      tone = "info";
+      break;
+    case "SubAgentSpawned":
+      line = `[sub-agent] spawned ${field(data, "agentId", field(data, "name", "unknown"))}`;
+      tone = "accent";
+      break;
+    case "SubAgentCompleted":
+      line = `[sub-agent] completed ${field(data, "agentId", field(data, "name", "unknown"))}`;
+      tone = "success";
+      break;
+    case "TestStarted":
+      line = `[test] started ${field(data, "name", field(data, "command"))}`;
+      tone = "info";
+      break;
+    case "TestFailed":
+      line = `[test] failed: ${field(data, "message", field(data, "error", "unknown error"))}`;
+      tone = "error";
+      break;
+    case "TestPassed":
+      line = `[test] passed ${field(data, "name", field(data, "command"))}`.trim();
+      tone = "success";
+      break;
+    case "ValidationStarted":
+      line = "[validation] started";
+      tone = "info";
       break;
     case "ValidationPassed":
-      write(`[validation] passed`);
+      line = "[validation] passed";
+      tone = "success";
+      break;
+    case "BudgetExceeded":
+      line = `[runtime] BudgetExceeded: ${field(data, "message")}`;
+      tone = "error";
+      break;
+    case "ThrashingDetected":
+      line = `[runtime] ThrashingDetected: ${field(data, "message")}`;
+      tone = "warning";
       break;
     case "SessionCompleted":
-      write(`[session] ${String(data.status ?? "completed")}`);
+      line = `[session] ${status}`;
+      tone = status === "completed" ? "success" : "error";
       break;
     default:
-      write(`[${event.type}]`);
+      line = `[${event.type}]`;
+      tone = "normal";
   }
+
+  write(humanLine(line, tone, options));
 }
