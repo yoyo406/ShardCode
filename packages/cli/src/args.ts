@@ -1,4 +1,4 @@
-export type CliCommand = "run" | "resume" | "help";
+export type CliCommand = "interactive" | "run" | "resume" | "help";
 export type CliProvider = "openai" | "anthropic" | "gemini" | "scripted";
 export type CliPermissionMode = "ask" | "acceptEdits" | "bypass";
 
@@ -16,6 +16,21 @@ export interface CliOptions {
   maxWallClockSeconds: number;
   json: boolean;
   isolatedEnvironment: boolean;
+}
+
+function defaults(): Omit<CliOptions, "command" | "prompt" | "sessionId"> {
+  return {
+    provider: DEFAULTS.provider,
+    providerExplicit: false,
+    model: DEFAULTS.model,
+    modelExplicit: false,
+    permissionMode: DEFAULTS.permissionMode,
+    maxTokens: DEFAULTS.maxTokens,
+    maxToolCalls: DEFAULTS.maxToolCalls,
+    maxWallClockSeconds: DEFAULTS.maxWallClockSeconds,
+    json: false,
+    isolatedEnvironment: false
+  };
 }
 
 const DEFAULTS = {
@@ -42,36 +57,20 @@ function nextValue(argv: string[], index: number, option: string): [string, numb
 
 export function parseArgs(argv: string[]): CliOptions {
   const first = argv[0];
-  if (!first || first === "--help" || first === "-h" || first === "help") {
+  if (first === "--help" || first === "-h" || first === "help") {
     return {
       command: "help",
-      provider: DEFAULTS.provider,
-      providerExplicit: false,
-      model: DEFAULTS.model,
-      modelExplicit: false,
-      permissionMode: DEFAULTS.permissionMode,
-      maxTokens: DEFAULTS.maxTokens,
-      maxToolCalls: DEFAULTS.maxToolCalls,
-      maxWallClockSeconds: DEFAULTS.maxWallClockSeconds,
-      json: false,
-      isolatedEnvironment: false
+      ...defaults()
     };
   }
-  if (first !== "run" && first !== "resume") throw new Error(`unknown command: ${first}`);
+
+  const command = first === "run" || first === "resume" ? first : "interactive";
+  const optionStart = command === "interactive" ? 0 : 1;
 
   const positional: string[] = [];
-  let provider: CliProvider = DEFAULTS.provider;
-  let providerExplicit = false;
-  let model = DEFAULTS.model;
-  let modelExplicit = false;
-  let permissionMode: CliPermissionMode = DEFAULTS.permissionMode;
-  let maxTokens = DEFAULTS.maxTokens;
-  let maxToolCalls = DEFAULTS.maxToolCalls;
-  let maxWallClockSeconds = DEFAULTS.maxWallClockSeconds;
-  let json = false;
-  let isolatedEnvironment = false;
+  let { provider, providerExplicit, model, modelExplicit, permissionMode, maxTokens, maxToolCalls, maxWallClockSeconds, json, isolatedEnvironment } = defaults();
 
-  for (let index = 1; index < argv.length; index += 1) {
+  for (let index = optionStart; index < argv.length; index += 1) {
     const argument = argv[index];
     if (!argument) continue;
     if (!argument.startsWith("--")) {
@@ -145,12 +144,12 @@ export function parseArgs(argv: string[]): CliOptions {
     }
   }
 
-  if (first === "run" && positional.length === 0) throw new Error("run requires a task prompt");
-  if (first === "resume" && positional.length === 0) throw new Error("resume requires a session id");
-  const command: "run" | "resume" = first;
+  if (command === "run" && positional.length === 0) throw new Error("run requires a task prompt");
+  if (command === "resume" && positional.length === 0) throw new Error("resume requires a session id");
+  const resolvedCommand = command === "interactive" && positional.length > 0 ? "run" : command;
   return {
-    command,
-    ...(command === "run" ? { prompt: positional.join(" ") } : { sessionId: positional[0]! }),
+    command: resolvedCommand,
+    ...(resolvedCommand === "run" ? { prompt: positional.join(" ") } : resolvedCommand === "resume" ? { sessionId: positional[0]! } : {}),
     provider,
     providerExplicit,
     model,

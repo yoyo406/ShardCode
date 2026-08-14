@@ -30,4 +30,22 @@ describe("CLI arguments", () => {
     expect(parseArgs(["resume", "session-123"])).toMatchObject({ command: "resume", sessionId: "session-123" });
     expect(() => parseArgs(["run", "task", "--not-real"])).toThrow("unknown option");
   });
+
+  it("opens the interactive mode with no explicit command", () => {
+    expect(parseArgs([])).toMatchObject({ command: "interactive", provider: "openai" });
+    expect(parseArgs(["--provider", "scripted"])).toMatchObject({
+      command: "interactive",
+      provider: "scripted"
+    });
+  });
+
+  it("accepts a bare task while preserving explicit commands", () => {
+    expect(parseArgs(["Fix the tests", "--provider", "scripted"])).toMatchObject({
+      command: "run",
+      prompt: "Fix the tests",
+      provider: "scripted"
+    });
+    expect(parseArgs(["run", "Fix the tests"])).toMatchObject({ command: "run", prompt: "Fix the tests" });
+    expect(parseArgs(["resume", "session-123"])).toMatchObject({ command: "resume", sessionId: "session-123" });
+  });
 });
