@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ToolDefinition } from "@shardcode/shared";
+import { isProtectedPathSegment } from "./paths.js";
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   { name: "read_file", description: "Read a UTF-8 file in the workspace.", risk: "read", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
@@ -42,15 +43,10 @@ export async function walkFiles(root: string, current = root): Promise<string[]>
   for (const entry of entries) {
     const name = entry.name.toLowerCase();
     if (
-      name === ".git" ||
+      isProtectedPathSegment(name) ||
       name === ".shardcode" ||
       name === "node_modules" ||
-      name === "dist" ||
-      name === "secrets" ||
-      name === "secret" ||
-      name === "credentials" ||
-      name === ".env" ||
-      name.startsWith(".env.")
+      name === "dist"
     ) continue;
     const path = join(current, entry.name);
     if (entry.isDirectory()) files.push(...(await walkFiles(root, path)));

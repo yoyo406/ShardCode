@@ -9,17 +9,24 @@ export interface WorkspacePath {
   protected: boolean;
 }
 
+const PROTECTED_PATH_NAMES = new Set([".git", "secrets", "secret", "credentials"]);
+
+export function isProtectedPathSegment(value: string): boolean {
+  const name = value.toLowerCase();
+  return (
+    PROTECTED_PATH_NAMES.has(name) ||
+    name === ".env" ||
+    name.startsWith(".env.") ||
+    name.startsWith("secrets.") ||
+    name.startsWith("secret.") ||
+    name.startsWith("credentials.")
+  );
+}
+
 function isProtectedRelativePath(value: string): boolean {
   const segments = value.split(/[\\/]+/).filter(Boolean);
-  const first = segments[0]?.toLowerCase();
-  const basename = segments.at(-1)?.toLowerCase() ?? "";
   return (
-    first === ".git" ||
-    first === "secrets" ||
-    first === "secret" ||
-    first === "credentials" ||
-    basename === ".env" ||
-    basename.startsWith(".env.") ||
+    segments.some(isProtectedPathSegment) ||
     value === ".shardcode/settings.local.json"
   );
 }

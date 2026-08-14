@@ -136,6 +136,10 @@ describe("repository tools", () => {
     await writeFile(join(root, "secrets", "key.txt"), "do-not-read");
     await mkdir(join(root, "credentials"));
     await writeFile(join(root, "credentials", "key.txt"), "do-not-read");
+    await mkdir(join(root, "config"), { recursive: true });
+    await writeFile(join(root, "config", "secrets.json"), "do-not-read");
+    await mkdir(join(root, "src", ".git"), { recursive: true });
+    await writeFile(join(root, "src", ".git", "config"), "do-not-read");
     const runtime = new ToolRuntime({ workspaceRoot: root, mode: "ask" });
 
     const listed = await runtime.execute({ id: "list-safe", name: "list_files", input: {} });
@@ -144,7 +148,11 @@ describe("repository tools", () => {
 
     expect(listed.output).not.toContain(".env");
     expect(listed.output).not.toContain("secrets/");
+    expect(listed.output).not.toContain("config/secrets.json");
+    expect(listed.output).not.toContain(".git/");
     expect(searched.output).toBe("");
     expect(matched.output).not.toContain("credentials/");
+    expect(matched.output).not.toContain("config/secrets.json");
+    expect(matched.output).not.toContain(".git/");
   });
 });
