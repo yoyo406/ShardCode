@@ -23,12 +23,23 @@ subprocess or Git operations directly.
 
 ## V1 execution model
 
-The public commands are:
+The public CLI modes are:
 
 ```text
+shardcode                         # interactive TTY mode
+shardcode "task description"      # direct run
 shardcode run "task description"
 shardcode resume <session-id>
+shardcode run "..." --json        # scriptable JSONL events
 ```
+
+With no arguments, the CLI selects the interactive terminal UI only when its
+input and output are TTYs; it fails closed for non-TTY use. The UI is a
+presentation/input layer in `packages/cli`, not a second runtime: it does not
+perform filesystem, subprocess, Git, provider, or session operations itself.
+Those actions continue through the existing CLI-to-runtime contracts. Direct
+`run`/`resume` execution and `--json` remain machine-oriented paths, and JSON
+events are emitted without ANSI styling.
 
 The runtime maintains the state hierarchy `Session -> Task -> Subtask ->
 Attempt -> ToolExecution`, persists the session under `.shardcode/sessions/`,
@@ -66,6 +77,14 @@ V1 uses agentic repository search only: `glob`, `grep`, `read_file` and
 `list_files`, with Git history tools available to the model. There is no
 embedding index, vector database or LSP dependency. The context engine accepts
 a tool invoker rather than importing providers or touching the filesystem.
+
+The interactive UI uses only Node `readline/promises` and local ANSI helpers
+(Option A, zero new TUI dependencies). Its color output falls back from
+truecolor to ANSI 256, ANSI 16, and no color as terminal capabilities require.
+It exposes only ShardCode metadata in its welcome/session/footer views. LSP,
+MCP, sidebar/workspace-session views, timeline/fork/sub-agent detail,
+OpenTUI animations/RGBA rendering, and native syntax highlighting are outside
+the CLI architecture and are not simulated by the TUI.
 
 Session memory is the serialized session and event log. Project memory is
 `SHARDCODE.md` and user memory is an explicit, separately scoped store. Every
