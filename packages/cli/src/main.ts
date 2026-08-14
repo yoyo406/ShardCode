@@ -5,7 +5,7 @@ import { createProvider, createScriptedProvider } from "@shardcode/providers";
 import { AgentRuntime, JsonSessionStore } from "@shardcode/runtime";
 import { ToolRuntime } from "@shardcode/tool-runtime";
 import { parseArgs, HELP_TEXT, type CliOptions, type CliProvider } from "./args.js";
-import { askForPermission } from "./prompts.js";
+import { askForPermission, sanitizePermissionPrompt } from "./prompts.js";
 import { renderEvent, sanitizeTerminalText } from "./render.js";
 import {
   createDefaultTuiTerminal,
@@ -121,7 +121,7 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
       mode: options.permissionMode,
       isolatedEnvironment: options.isolatedEnvironment,
       ask: async (request, decision) => {
-        const question = sanitizeTerminalText(`${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`);
+        const question = sanitizePermissionPrompt(`${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`);
         if (tui) return tui.confirm(question);
         return io.ask ? io.ask(question, request, decision) : false;
       }

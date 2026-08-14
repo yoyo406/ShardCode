@@ -114,7 +114,7 @@ describe("CLI lifecycle", () => {
         tool: "run_shell",
         command: "*",
         decision: "ask",
-        reason: "review\u001b[2J\rthis command"
+        reason: "review\u001b[2J\r\n\tthis command"
       }]
     }));
     const testIo = io();
@@ -131,8 +131,8 @@ describe("CLI lifecycle", () => {
 
     expect(question).toContain("run_shell:");
     expect(question).toContain("reviewthis command");
-    expect(question).not.toMatch(/[\u001b\r]/);
-    expect(rawCommand).toContain("scripted check");
+    expect(question).not.toMatch(/[\u001b\r\n\t]/);
+    expect(rawCommand).toBe("node -e \"console.log('scripted check')\"");
   });
 
   it("keeps interactive settings truthful when slash commands request changes", async () => {

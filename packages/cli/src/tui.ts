@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { parseInteractiveInput, type SlashCommand } from "./slash.js";
+import { sanitizePermissionPrompt } from "./prompts.js";
 import { sanitizeTerminalText } from "./render.js";
 import { detectTuiCapabilities, styleTuiText, type TuiTone } from "./theme.js";
 
@@ -371,7 +372,7 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
     open: async () => undefined,
     question: normalQuestion,
     confirm: async (prompt) => /^(y|yes|o|oui)$/i.test(
-      (await normalQuestion(`${style(sanitizeTerminalText(prompt), "warning")} [y/N] `)).trim()
+      (await normalQuestion(`${style(sanitizePermissionPrompt(prompt), "warning")} [y/N] `)).trim()
     ),
     secret: async (prompt) => {
       if (!input.isTTY || typeof input.setRawMode !== "function") return normalQuestion(prompt);

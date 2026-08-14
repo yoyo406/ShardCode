@@ -7,7 +7,7 @@ const ANSI_CSI = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const ANSI_C1_CSI = /\u009b[0-?]*[ -/]*[@-~]/g;
 const ANSI_SINGLE = /\u001b[@-_]/g;
 
-function sanitizePermissionPrompt(question: string): string {
+export function sanitizePermissionPrompt(question: string): string {
   return question
     .replace(ANSI_OSC, "")
     .replace(C1_OSC, "")

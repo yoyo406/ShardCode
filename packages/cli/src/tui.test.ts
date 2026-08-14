@@ -228,6 +228,18 @@ describe("interactive TUI", () => {
     terminal.close();
   });
 
+  it("keeps LF and tab out of the default confirmation display", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+    const confirmed = terminal.confirm("run_shell: node\n\t-e hostile\n\treason");
+    streams.input.write("y\n");
+
+    await expect(confirmed).resolves.toBe(true);
+    expect(streams.outputText()).not.toContain("\n");
+    expect(streams.outputText()).not.toContain("\t");
+    terminal.close();
+  });
+
   it("uses plain styling when output is not a TTY", () => {
     const streams = fakeTtyStreams();
     streams.output.isTTY = false;
