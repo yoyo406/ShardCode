@@ -148,7 +148,12 @@ describe("Pi-inspired runtime controls", () => {
 
   it("records an aborted result for every parallel tool before persisting", async () => {
     const provider = new SequenceProvider([
-      response("inspect", [call("read-1", "read_file", { path: "a.ts" }), call("read-2", "read_file", { path: "b.ts" })])
+      response("inspect", [
+        call("read-1", "read_file", { path: "a.ts" }),
+        call("read-2", "read_file", { path: "b.ts" }),
+        call("read-3", "read_file", { path: "c.ts" }),
+        call("read-4", "read_file", { path: "d.ts" })
+      ])
     ]);
     const tools = new AbortableParallelTools();
     const runtime = new AgentRuntime({
@@ -160,12 +165,12 @@ describe("Pi-inspired runtime controls", () => {
     });
 
     const running = runtime.run("Inspect this task");
-    await waitFor(() => tools.started === 2);
+    await waitFor(() => tools.started === 4);
     runtime.abort();
     const session = await running;
 
     expect(session.status).toBe("aborted");
-    expect(session.messages.filter((message) => message.role === "tool")).toHaveLength(2);
+    expect(session.messages.filter((message) => message.role === "tool")).toHaveLength(4);
     expect(session.rootTask.toolExecutions?.every((execution) => execution.result?.error?.code === "ABORTED")).toBe(true);
   });
 

@@ -13,24 +13,31 @@ export interface ContextCompactionResult {
   omittedMessages: number;
 }
 
-function messageCharacters(message: ModelMessage): number {
-  return JSON.stringify(message).length;
-}
-
 function totalCharacters(messages: ModelMessage[]): number {
   return JSON.stringify(messages).length;
 }
 
 function truncateMessage(message: ModelMessage, budget: number): ModelMessage | undefined {
   if (budget <= 0) return undefined;
-  const overhead = messageCharacters({ ...message, content: "" });
+  if (totalCharacters([message]) <= budget) return message;
   const suffix = "\n[…contenu tronqué pour tenir dans le contexte…]";
-  const contentBudget = budget - overhead;
-  if (contentBudget <= 0) return undefined;
-  if (message.content.length <= contentBudget) return message;
-  const marker = suffix.slice(0, contentBudget);
-  const prefixLength = Math.max(0, contentBudget - marker.length);
-  return { ...message, content: `${message.content.slice(0, prefixLength)}${marker}` };
+  const findBest = (marker: string): ModelMessage | undefined => {
+    let low = 0;
+    let high = message.content.length;
+    let best: ModelMessage | undefined;
+    while (low <= high) {
+      const prefixLength = Math.floor((low + high) / 2);
+      const candidate = { ...message, content: `${message.content.slice(0, prefixLength)}${marker}` };
+      if (totalCharacters([candidate]) <= budget) {
+        best = candidate;
+        low = prefixLength + 1;
+      } else {
+        high = prefixLength - 1;
+      }
+    }
+    return best;
+  };
+  return findBest(suffix) ?? findBest("");
 }
 
 function fitGroup(group: ModelMessage[], budget: number): ModelMessage[] {
@@ -40,10 +47,8 @@ function fitGroup(group: ModelMessage[], budget: number): ModelMessage[] {
 
   const first = truncateMessage(group[0]!, Math.floor(budget * 0.55));
   const last = group.length > 1 ? truncateMessage(group.at(-1)!, Math.floor(budget * 0.45)) : undefined;
-  if (first && last && group.length > 1) return [first, last];
-  if (first) return [first];
-  if (last) return [last];
-  return [];
+  const candidates = first && last && group.length > 1 ? [first, last] : first ? [first] : last ? [last] : [];
+  return fitMessages(candidates, budget);
 }
 
 function fitMessages(messages: ModelMessage[], budget: number): ModelMessage[] {
@@ -97,7 +102,7 @@ export function compactContext(
   const systemMessages = messages.filter((message) => message.role === "system");
   const groups = splitIntoUserGroups(messages.filter((message) => message.role !== "system"));
   if (groups.length === 0) {
-    const fitted = fitGroup(messages, options.maxCharacters);
+    const fitted = fitMessages(fitGroup(messages, options.maxCharacters), options.maxCharacters);
     return {
       messages: fitted,
       compacted: fitted.length !== messages.length || totalCharacters(fitted) < originalCharacters,

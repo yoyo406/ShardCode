@@ -31,4 +31,16 @@ describe("context compaction", () => {
     expect(result.compacted).toBe(false);
     expect(result.messages).toBe(messages);
   });
+
+  it("bounds a system-only transcript using serialized message size", () => {
+    const messages: ModelMessage[] = [
+      { role: "system", content: `${'quoted "line"\\n'.repeat(1_000)}` },
+      { role: "system", content: `${'quoted "line"\\n'.repeat(1_000)}` }
+    ];
+    const result = compactContext(messages, { maxCharacters: 200 });
+
+    expect(result.compacted).toBe(true);
+    expect(result.finalCharacters).toBeLessThanOrEqual(200);
+    expect(JSON.stringify(result.messages).length).toBeLessThanOrEqual(200);
+  });
 });

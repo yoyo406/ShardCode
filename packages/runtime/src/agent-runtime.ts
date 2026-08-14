@@ -286,7 +286,9 @@ export class AgentRuntime {
               await this.emit(session, "ToolDenied", { executionId: execution.id, result });
             } else {
               await this.emit(session, "ToolFailed", { executionId: execution.id, result });
-              if (detector.observe(result)) throw new ThrashingDetectedError(`equivalent tool failure repeated ${detector.currentCount()} times`);
+              if (result.error?.code !== "ABORTED" && detector.observe(result)) {
+                throw new ThrashingDetectedError(`equivalent tool failure repeated ${detector.currentCount()} times`);
+              }
             }
           }
           this.throwIfAborted(signal);

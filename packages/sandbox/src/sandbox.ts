@@ -20,8 +20,18 @@ function terminateProcessTree(child: ChildProcess, signal: NodeJS.Signals): void
     return;
   }
   if (process.platform === "win32") {
+    const fallback = () => {
+      try {
+        child.kill(signal);
+      } catch {
+        // The process may have exited while taskkill was running.
+      }
+    };
     const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
-    killer.on("error", () => child.kill(signal));
+    killer.on("error", fallback);
+    killer.on("close", (exitCode) => {
+      if (exitCode !== 0) fallback();
+    });
     return;
   }
   try {
