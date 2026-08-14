@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { parseInteractiveInput, type SlashCommand } from "./slash.js";
-import { sanitizeTerminalText } from "./render.js";
+import { sanitizeTerminalText, sanitizeTuiTerminalText } from "./render.js";
 import { detectTuiCapabilities, styleTuiText, type TuiTone } from "./theme.js";
 
 const MAX_HISTORY_LINES = 200;
@@ -26,6 +26,7 @@ export interface TuiTerminal {
   finish(exitCode: number): void;
   close(): void;
   style?: TuiStyle;
+  sanitize?(line: string): string;
 }
 
 interface DefaultTuiTerminal extends TuiTerminal {
@@ -48,9 +49,9 @@ export interface DefaultTuiTerminalOptions {
 }
 
 export interface TuiRuntimeInfo {
-  permissionMode: string;
-  provider: string;
-  model: string;
+  readonly permissionMode: string;
+  readonly provider: string;
+  readonly model: string;
 }
 
 export interface TuiSessionSnapshot {
@@ -125,15 +126,16 @@ export function renderTuiFooter(
 }
 
 function appendHistory(history: string[], value: string): void {
-  for (const valueLine of sanitizeTerminalText(value).split("\n")) {
+  for (const valueLine of value.split("\n")) {
     history.push(valueLine.slice(0, MAX_HISTORY_LINE_LENGTH));
   }
   if (history.length > MAX_HISTORY_LINES) history.splice(0, history.length - MAX_HISTORY_LINES);
 }
 
 function writeHistoryLine(terminal: TuiTerminal, history: string[], value: string): void {
-  appendHistory(history, value);
-  const lastLines = history.slice(-value.split("\n").length);
+  const safeValue = terminal.sanitize ? terminal.sanitize(value) : sanitizeTerminalText(value);
+  appendHistory(history, safeValue);
+  const lastLines = history.slice(-safeValue.split("\n").length);
   for (const historyLine of lastLines) terminal.write(historyLine);
 }
 
@@ -199,12 +201,18 @@ async function handleCommand(
       writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
       return false;
     case "model":
-      if (command.model) state.info.model = command.model;
-      terminal.write(line("Model:", `${state.info.provider} / ${state.info.model}`, "accent", terminal.style));
+      if (command.model) {
+        terminal.write(paint(`Model remains ${state.info.provider} / ${state.info.model} for this session.`, "warning", terminal.style));
+      } else {
+        terminal.write(line("Model:", `${state.info.provider} / ${state.info.model}`, "accent", terminal.style));
+      }
       return false;
     case "permissions":
-      if (command.mode) state.info.permissionMode = command.mode;
-      terminal.write(line("Permissions:", state.info.permissionMode, "warning", terminal.style));
+      if (command.mode) {
+        terminal.write(paint(`Permissions remain ${state.info.permissionMode} for this session.`, "warning", terminal.style));
+      } else {
+        terminal.write(line("Permissions:", state.info.permissionMode, "warning", terminal.style));
+      }
       return false;
     case "connect":
       if (!options.connect) {
@@ -294,6 +302,12 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
   const capabilities = detectTuiCapabilities(Boolean(input.isTTY), options.env ?? process.env);
   const pendingLines: string[] = [];
   const style: TuiStyle = (text, tone) => styleTuiText(text, tone, capabilities);
+  const trustedStyles = new Set<string>(["\u001b[39m"]);
+  for (const tone of ["normal", "primary", "accent", "success", "warning", "error", "info"] as const) {
+    const probe = styleTuiText("x", tone, capabilities);
+    const suffix = "x\u001b[39m";
+    if (probe.endsWith(suffix)) trustedStyles.add(probe.slice(0, -suffix.length));
+  }
   let cancelActiveSecret: (() => void) | undefined;
   const normalQuestion = async (prompt: string): Promise<string> => {
     const pending = pendingLines.shift();
@@ -301,13 +315,10 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
     output.write(prompt);
     return readline.question("");
   };
-  const write = (stream: NodeJS.WritableStream, value: string): void => {
-    stream.write(`${sanitizeTerminalText(value)}\n`);
-  };
-
   return {
     isTTY: Boolean(input.isTTY && output.isTTY),
     style,
+    sanitize: (value) => sanitizeTuiTerminalText(value, trustedStyles),
     open: async () => undefined,
     question: normalQuestion,
     confirm: async (prompt) => /^(y|yes|o|oui)$/i.test(
@@ -361,8 +372,8 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
         input.on("data", onData);
       });
     },
-    write: (value) => write(output, value),
-    error: (value) => write(errorOutput, value),
+    write: (value) => output.write(`${sanitizeTuiTerminalText(value, trustedStyles)}\n`),
+    error: (value) => errorOutput.write(`${sanitizeTuiTerminalText(value, trustedStyles)}\n`),
     clear: () => output.write("\u001b[2J\u001b[H"),
     setStatus: () => undefined,
     finish: () => undefined,

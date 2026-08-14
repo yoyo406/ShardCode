@@ -1,4 +1,5 @@
 import { PassThrough } from "node:stream";
+import { createEvent } from "@shardcode/shared";
 import { describe, expect, it } from "vitest";
 import {
   createDefaultTuiTerminal,
@@ -11,6 +12,7 @@ import {
   type TuiSessionSnapshot,
   type TuiTerminal
 } from "./tui.js";
+import { renderEvent } from "./render.js";
 
 const info: TuiRuntimeInfo = {
   permissionMode: "acceptEdits",
@@ -156,6 +158,36 @@ describe("interactive TUI", () => {
     await expect(confirmed).resolves.toBe(true);
     expect(streams.outputText()).toContain("\u001b[38;2;245;167;66mrun_shell: pnpm test\u001b[39m [y/N] ");
     expect(streams.outputText()).not.toContain("\u001b[31m");
+    terminal.close();
+  });
+
+  it("preserves trusted TUI styling through history while stripping hostile event ANSI", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: { COLORTERM: "truecolor" } });
+    const inputs = ["Run the checks", "/exit"];
+    terminal.question = async () => inputs.shift() ?? "/exit";
+    const eventLines: string[] = [];
+
+    renderEvent(
+      createEvent("session-1", "ToolFailed", {
+        result: { output: "\u001b[31mrm -rf\u001b[0m\nfailed" }
+      }),
+      (line) => eventLines.push(line),
+      false,
+      terminal.style ? { style: terminal.style } : undefined
+    );
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async () => ({ exitCode: 0, output: eventLines })
+    })).resolves.toBe(0);
+
+    const output = streams.outputText();
+    expect(output).toContain("\u001b[38;2;250;178;131mShardCode\u001b[39m");
+    expect(output).toContain("\u001b[38;2;224;108;117mÉchec : rm -rf\nfailed\u001b[39m");
+    expect(output).not.toContain("\u001b[31m");
     terminal.close();
   });
 

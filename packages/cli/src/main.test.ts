@@ -58,6 +58,25 @@ describe("CLI lifecycle", () => {
     expect(terminal.closed).toBe(1);
   });
 
+  it("keeps interactive settings truthful when slash commands request changes", async () => {
+    const testIo = io();
+    const terminal = tuiTerminal(["/permissions ask", "/model alternate", "/status", "/exit"]);
+    testIo.tui = terminal;
+
+    const exitCode = await runCli([
+      "--provider", "scripted",
+      "--permission-mode", "bypass",
+      "--isolated-environment"
+    ], testIo);
+
+    const output = terminal.output.join("\n");
+    expect(exitCode).toBe(0);
+    expect(output).toContain("Permissions remain bypass");
+    expect(output).not.toContain("Permissions: ask");
+    expect(output).toContain("Model remains scripted / scripted-local");
+    expect(output).not.toContain("alternate");
+  });
+
   it("rejects JSON output in interactive mode", async () => {
     const testIo = io();
 
