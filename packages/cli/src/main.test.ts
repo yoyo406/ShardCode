@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { JsonSessionStore } from "@shardcode/runtime";
 import { FileStorage } from "@shardcode/tool-runtime";
@@ -68,7 +68,7 @@ describe("CLI lifecycle", () => {
     const exitCode = await runCli(["run", "Run the checks", "--provider", "scripted", "--permission-mode", "bypass", "--isolated-environment"], testIo);
 
     expect(exitCode).toBe(0);
-    expect(testIo.output.some((line) => line.includes("[session] completed"))).toBe(true);
+    expect(testIo.output.some((line) => line.includes("Session terminée (réussie)"))).toBe(true);
     expect(testIo.output.some((line) => line.includes("completed"))).toBe(true);
   });
 
@@ -86,11 +86,15 @@ describe("CLI lifecycle", () => {
       cwd: join(repositoryRoot, "packages/cli"),
       env: { INIT_CWD: repositoryRoot }
     });
+    const sessionsPath = join(repositoryRoot, ".shardcode", "sessions");
+    const existingSessions = new Set((await readdir(sessionsPath).catch(() => [])).filter((name) => name.endsWith(".json")));
 
     const exitCode = await runCli(["run", "Use the repository root", "--provider", "scripted", "--permission-mode", "bypass", "--isolated-environment"], testIo);
 
     expect(exitCode).toBe(0);
-    const sessionId = testIo.output.find((line) => line.startsWith("[session] started "))?.split(" ").at(-1);
+    expect(testIo.output).toContain("Session démarrée");
+    const sessionFile = (await readdir(sessionsPath)).find((name) => name.endsWith(".json") && !existingSessions.has(name));
+    const sessionId = sessionFile?.slice(0, -".json".length);
     expect(sessionId).toBeTruthy();
     const session = await new JsonSessionStore(new FileStorage(join(repositoryRoot, ".shardcode"))).load(sessionId ?? "");
     expect(session?.workspaceRoot).toBe(repositoryRoot);
@@ -110,7 +114,7 @@ describe("CLI lifecycle", () => {
     ], testIo);
 
     expect(exitCode).toBe(0);
-    expect(terminal.output.some((line) => line.includes("[session] completed"))).toBe(true);
+    expect(terminal.output.some((line) => line.includes("Session terminée (réussie)"))).toBe(true);
     expect(terminal.output.some((line) => line.includes("Last session:"))).toBe(true);
     expect(terminal.finished).toEqual([0]);
     expect(terminal.closed).toBe(1);
