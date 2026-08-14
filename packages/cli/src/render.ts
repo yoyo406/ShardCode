@@ -6,6 +6,7 @@ export interface RenderOptions {
 }
 
 const ANSI_OSC = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g;
+const C1_OSC = /\u009d[^\u0007\u009c]*(?:\u0007|\u009c|\u001b\\)/g;
 const ANSI_CSI = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const ANSI_C1_CSI = /\u009b[0-?]*[ -/]*[@-~]/g;
 const ANSI_SINGLE = /\u001b[@-_]/g;
@@ -13,10 +14,12 @@ const ANSI_SINGLE = /\u001b[@-_]/g;
 export function sanitizeTerminalText(value: string): string {
   return value
     .replace(ANSI_OSC, "")
+    .replace(C1_OSC, "")
     .replace(ANSI_CSI, "")
     .replace(ANSI_C1_CSI, "")
     .replace(ANSI_SINGLE, "")
     .replace(/\u001b/g, "")
+    .replace(/[\u0080-\u009f]/g, "")
     .replace(/\r/g, "")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 }

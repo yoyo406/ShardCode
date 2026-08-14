@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runCli, type CliIO } from "./main.js";
+import { runCli, writeFinalMessage, type CliIO } from "./main.js";
 
 function io(): CliIO & { output: string[]; errors: string[] } {
   const value = {
@@ -30,5 +30,21 @@ describe("CLI lifecycle", () => {
 
     expect(exitCode).toBe(2);
     expect(testIo.errors.join("\n")).toContain("session id");
+  });
+
+  it("sanitizes final model output at the human output sink", () => {
+    const testIo = io();
+
+    writeFinalMessage(testIo, "\u009d8;window title\u009c\u001b[31mfinal\u001b[0m", false);
+
+    expect(testIo.output).toEqual(["final"]);
+  });
+
+  it("does not write the final model output in JSON mode", () => {
+    const testIo = io();
+
+    writeFinalMessage(testIo, "\u001b[31mfinal\u001b[0m", true);
+
+    expect(testIo.output).toEqual([]);
   });
 });

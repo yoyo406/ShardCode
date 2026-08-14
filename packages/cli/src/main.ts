@@ -6,7 +6,7 @@ import { AgentRuntime, JsonSessionStore } from "@shardcode/runtime";
 import { ToolRuntime } from "@shardcode/tool-runtime";
 import { parseArgs, HELP_TEXT, type CliOptions, type CliProvider } from "./args.js";
 import { askForPermission } from "./prompts.js";
-import { renderEvent } from "./render.js";
+import { renderEvent, sanitizeTerminalText } from "./render.js";
 
 export interface CliIO {
   write(line: string): void;
@@ -42,6 +42,10 @@ function environmentKey(provider: CliProvider): string | undefined {
     case "gemini": return "GEMINI_API_KEY";
     case "scripted": return undefined;
   }
+}
+
+export function writeFinalMessage(io: Pick<CliIO, "write">, message: string | undefined, json: boolean): void {
+  if (!json && message) io.write(sanitizeTerminalText(message));
 }
 
 function buildProvider(options: CliOptions, env: Record<string, string | undefined>) {
@@ -130,7 +134,7 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
     const session = options.command === "run"
       ? await runtime.run(options.prompt ?? "")
       : await runtime.resume(options.sessionId ?? "");
-    if (!options.json && session.finalMessage) io.write(session.finalMessage);
+    writeFinalMessage(io, session.finalMessage, options.json);
     return session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1;
   } catch (error) {
     io.error(error instanceof Error ? error.message : String(error));

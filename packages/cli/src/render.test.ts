@@ -1,6 +1,6 @@
 import { createEvent } from "@shardcode/shared";
 import { describe, expect, it } from "vitest";
-import { renderEvent } from "./render.js";
+import { renderEvent, sanitizeTerminalText } from "./render.js";
 
 describe("event rendering", () => {
   it("sanitizes hostile event text before applying a semantic tone", () => {
@@ -19,8 +19,21 @@ describe("event rendering", () => {
 
   it("keeps JSON output unchanged and unstyled", () => {
     const lines: string[] = [];
+    let styleCalls = 0;
     const event = createEvent("session-1", "ValidationPassed", { commands: ["pnpm test"] });
-    renderEvent(event, (line) => lines.push(line), true, { style: () => "should-not-run" });
+    renderEvent(event, (line) => lines.push(line), true, {
+      style: () => {
+        styleCalls += 1;
+        return "should-not-run";
+      }
+    });
     expect(JSON.parse(lines[0]!)).toEqual(event);
+    expect(styleCalls).toBe(0);
+  });
+
+  it("removes C1 OSC sequences and every standalone C1 control", () => {
+    const standaloneC1 = String.fromCharCode(...Array.from({ length: 32 }, (_, index) => 0x80 + index));
+
+    expect(sanitizeTerminalText(`before\u009d8;window title\u009c${standaloneC1}after`)).toBe("beforeafter");
   });
 });
