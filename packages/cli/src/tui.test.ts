@@ -266,6 +266,22 @@ describe("interactive TUI", () => {
     await expect(execution).resolves.toBe(0);
   });
 
+  it("reports failed instead of error when execution throws", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async () => {
+        throw new Error("execution failed");
+      }
+    })).resolves.toBe(1);
+
+    expect(terminal.statuses).toEqual(["waiting", "running", "failed"]);
+    expect(terminal.statuses).not.toContain("error");
+  });
+
   it("accepts legacy buffered output without duplicating live output", async () => {
     const terminal = fakeTerminal(["Run the checks", "/exit"]);
 

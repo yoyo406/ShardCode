@@ -358,7 +358,7 @@ async function runRequest(
     return result;
   } catch (error) {
     terminal.error(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
-    terminal.setStatus("error");
+    terminal.setStatus("failed");
     return { exitCode: 1 };
   }
 }

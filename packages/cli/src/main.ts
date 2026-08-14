@@ -65,6 +65,11 @@ export function writeFinalMessage(io: Pick<CliIO, "write">, message: string | un
   if (!json && message) io.write(sanitizeTerminalText(message));
 }
 
+function sanitizeCliError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return sanitizeTerminalText(message).replace(/\r/g, "");
+}
+
 function buildProvider(options: CliOptions, env: Record<string, string | undefined>) {
   const model = options.modelExplicit ? options.model : defaultModel(options.provider);
   if (options.provider === "scripted") {
@@ -101,7 +106,7 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
   try {
     options = parseArgs(argv);
   } catch (error) {
-    io.error(error instanceof Error ? error.message : String(error));
+    io.error(sanitizeCliError(error));
     return 2;
   }
   if (options.command === "help") {
@@ -205,7 +210,7 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
         : { kind: "resume", sessionId: options.sessionId ?? "" }
     )).exitCode;
   } catch (error) {
-    io.error(error instanceof Error ? error.message : String(error));
+    io.error(sanitizeCliError(error));
     return 1;
   }
 }

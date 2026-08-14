@@ -169,6 +169,26 @@ describe("CLI lifecycle", () => {
     expect(testIo.errors.join("\n")).toContain("session id");
   });
 
+  it("sanitizes control-bearing parse errors before the direct error sink", async () => {
+    const testIo = io();
+    const hostile = "\u001b[2J\u001b]8;;https://evil\u0007\u009b31m\r";
+
+    await expect(runCli(["run", "Run the checks", "--provider", hostile], testIo)).resolves.toBe(2);
+
+    expect(testIo.errors).toHaveLength(1);
+    expect(testIo.errors[0]).not.toMatch(/[\u001b\u0080-\u009f\r]/);
+  });
+
+  it("sanitizes control-bearing runtime errors before the direct error sink", async () => {
+    const testIo = io();
+    const hostile = "missing\u001b[2J\u001b]8;;https://evil\u0007\u009b31m\r";
+
+    await expect(runCli(["resume", hostile, "--provider", "scripted"], testIo)).resolves.toBe(1);
+
+    expect(testIo.errors).toHaveLength(1);
+    expect(testIo.errors[0]).not.toMatch(/[\u001b\u0080-\u009f\r]/);
+  });
+
   it("sanitizes final model output at the human output sink", () => {
     const testIo = io();
 
