@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runCli, writeFinalMessage, type CliIO } from "./main.js";
+import type { TuiTerminal } from "./tui.js";
 
 function io(): CliIO & { output: string[]; errors: string[] } {
   const value = {
@@ -14,6 +15,25 @@ function io(): CliIO & { output: string[]; errors: string[] } {
   return value;
 }
 
+function tuiTerminal(inputs: string[]): TuiTerminal & { output: string[]; finished: number[]; closed: number } {
+  const value = {
+    isTTY: true,
+    output: [] as string[],
+    finished: [] as number[],
+    closed: 0,
+    open: async () => undefined,
+    question: async () => inputs.shift() ?? "/exit",
+    confirm: async () => true,
+    write: (line: string) => value.output.push(line),
+    error: (line: string) => value.output.push(line),
+    clear: () => undefined,
+    setStatus: () => undefined,
+    finish: (exitCode: number) => value.finished.push(exitCode),
+    close: () => { value.closed += 1; }
+  };
+  return value;
+}
+
 describe("CLI lifecycle", () => {
   it("runs a scripted provider without a network request", async () => {
     const testIo = io();
@@ -22,6 +42,27 @@ describe("CLI lifecycle", () => {
     expect(exitCode).toBe(0);
     expect(testIo.output.some((line) => line.includes("[session] completed"))).toBe(true);
     expect(testIo.output.some((line) => line.includes("completed"))).toBe(true);
+  });
+
+  it("runs the scripted lifecycle through the themed interactive TUI", async () => {
+    const testIo = io();
+    const terminal = tuiTerminal(["Run the checks", "/status", "/exit"]);
+    testIo.tui = terminal;
+
+    const exitCode = await runCli(["--provider", "scripted", "--permission-mode", "acceptEdits"], testIo);
+
+    expect(exitCode).toBe(0);
+    expect(terminal.output.some((line) => line.includes("Session"))).toBe(true);
+    expect(terminal.output.some((line) => line.includes("Last session"))).toBe(true);
+    expect(terminal.finished).toEqual([0]);
+    expect(terminal.closed).toBe(1);
+  });
+
+  it("rejects JSON output in interactive mode", async () => {
+    const testIo = io();
+
+    expect(await runCli(["--json"], testIo)).toBe(2);
+    expect(testIo.errors.join("\n")).toContain("--json");
   });
 
   it("returns a usage error for an incomplete resume command", async () => {

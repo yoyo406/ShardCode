@@ -7,13 +7,31 @@ import { ToolRuntime } from "@shardcode/tool-runtime";
 import { parseArgs, HELP_TEXT, type CliOptions, type CliProvider } from "./args.js";
 import { askForPermission } from "./prompts.js";
 import { renderEvent, sanitizeTerminalText } from "./render.js";
+import {
+  createDefaultTuiTerminal,
+  runInteractiveTui,
+  type InteractiveTaskRequest,
+  type InteractiveTaskResult,
+  type TuiTerminal
+} from "./tui.js";
 
 export interface CliIO {
   write(line: string): void;
   error(line: string): void;
   ask?(question: string, request?: PermissionRequest, decision?: PermissionDecision): Promise<boolean>;
+  tui?: TuiTerminal;
   cwd: string;
   env: Record<string, string | undefined>;
+}
+
+interface TuiExecutionIO {
+  output: string[];
+  write(line: string): void;
+}
+
+function createTuiExecutionIO(): TuiExecutionIO {
+  const output: string[] = [];
+  return { output, write: (line) => output.push(line) };
 }
 
 function defaultIO(): CliIO {
@@ -91,51 +109,94 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
     io.write(HELP_TEXT);
     return 0;
   }
+  if (options.command === "interactive" && options.json) {
+    io.error("--json is not available in interactive mode");
+    return 2;
+  }
 
   try {
+    const tui = options.command === "interactive"
+      ? io.tui ?? createDefaultTuiTerminal({ env: io.env })
+      : undefined;
     const toolRuntime = await ToolRuntime.create({
       workspaceRoot: io.cwd,
       mode: options.permissionMode,
       isolatedEnvironment: options.isolatedEnvironment,
-      ask: async (request, decision) => io.ask ? io.ask(
-        `${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`,
-        request,
-        decision
-      ) : false
+      ask: async (request, decision) => {
+        const question = `${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`;
+        if (tui) return tui.confirm(sanitizeTerminalText(question));
+        return io.ask ? io.ask(question, request, decision) : false;
+      }
     });
     const sessionStore = new JsonSessionStore(toolRuntime.storage());
-    let providerOptions = options;
-    if (options.command === "resume" && options.sessionId && !options.providerExplicit) {
-      const existing = await sessionStore.load(options.sessionId);
-      if (existing) {
-        providerOptions = {
-          ...options,
-          provider: existing.provider as CliProvider,
-          model: existing.model,
-          modelExplicit: true
+
+    const executeTask = async (request: InteractiveTaskRequest): Promise<InteractiveTaskResult> => {
+      let providerOptions = options;
+      if (request.kind === "resume" && !options.providerExplicit) {
+        const existing = await sessionStore.load(request.sessionId);
+        if (existing) {
+          providerOptions = {
+            ...options,
+            provider: existing.provider as CliProvider,
+            model: existing.model,
+            modelExplicit: true
+          };
+        }
+      }
+      const taskIO = tui ? createTuiExecutionIO() : undefined;
+      const runtime = new AgentRuntime({
+        provider: buildProvider(providerOptions, io.env),
+        tools: toolRuntime,
+        context: new ContextEngine(toolRuntime),
+        memory: new MemoryStore(toolRuntime.storage()),
+        sessionStore,
+        workspaceRoot: io.cwd,
+        budget: {
+          maxTokens: options.maxTokens,
+          maxToolCalls: options.maxToolCalls,
+          maxWallClockSeconds: options.maxWallClockSeconds
+        },
+        onEvent: async (event: ShardCodeEvent) => renderEvent(
+          event,
+          taskIO ? taskIO.write : io.write,
+          options.json,
+          tui?.style ? { style: tui.style } : undefined
+        )
+      });
+      const session = request.kind === "run"
+        ? await runtime.run(request.prompt)
+        : await runtime.resume(request.sessionId);
+      const exitCode = session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1;
+      if (taskIO) {
+        writeFinalMessage(taskIO, session.finalMessage, false);
+        return {
+          exitCode,
+          session: { sessionId: session.id, status: session.status },
+          output: taskIO.output
         };
       }
+      writeFinalMessage(io, session.finalMessage, options.json);
+      return { exitCode, session: { sessionId: session.id, status: session.status } };
+    };
+
+    if (options.command === "interactive") {
+      return runInteractiveTui({
+        terminal: tui!,
+        workspaceRoot: io.cwd,
+        info: {
+          permissionMode: options.permissionMode,
+          provider: options.provider,
+          model: options.modelExplicit ? options.model : defaultModel(options.provider)
+        },
+        execute: executeTask
+      });
     }
-    const provider = buildProvider(providerOptions, io.env);
-    const runtime = new AgentRuntime({
-      provider,
-      tools: toolRuntime,
-      context: new ContextEngine(toolRuntime),
-      memory: new MemoryStore(toolRuntime.storage()),
-      sessionStore,
-      workspaceRoot: io.cwd,
-      budget: {
-        maxTokens: options.maxTokens,
-        maxToolCalls: options.maxToolCalls,
-        maxWallClockSeconds: options.maxWallClockSeconds
-      },
-      onEvent: async (event: ShardCodeEvent) => renderEvent(event, io.write, options.json)
-    });
-    const session = options.command === "run"
-      ? await runtime.run(options.prompt ?? "")
-      : await runtime.resume(options.sessionId ?? "");
-    writeFinalMessage(io, session.finalMessage, options.json);
-    return session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1;
+
+    return (await executeTask(
+      options.command === "run"
+        ? { kind: "run", prompt: options.prompt ?? "" }
+        : { kind: "resume", sessionId: options.sessionId ?? "" }
+    )).exitCode;
   } catch (error) {
     io.error(error instanceof Error ? error.message : String(error));
     return 1;
