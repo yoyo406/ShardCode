@@ -45,8 +45,20 @@ Attempt -> ToolExecution`, persists the session under `.shardcode/sessions/`,
 and appends a JSONL event stream for each session. The loop is dynamic:
 
 ```text
-observe -> reason -> choose tool -> permission check -> execute -> observe
+observe -> compact/transform context -> reason -> choose tool
+  -> permission check -> execute -> observe
 ```
+
+The persisted transcript is never compacted in place. A bounded provider view
+is derived before each model request, preserving the original task and recent
+user-turn groups while recording a `ContextCompacted` event. Independent
+read/search/Git tools may run concurrently; writes and shell commands remain
+serialized, and results are appended to the transcript in model order.
+
+Runtime hooks can block a tool before execution or normalize its result after
+execution. An `AbortSignal` flows from the runtime to providers, tools and
+the process sandbox, so `Ctrl-C` terminates an active session cleanly instead
+of losing its persisted state.
 
 An individual tool failure is returned to the model as an observation. The
 runtime does not retry failed tool executions. Provider transport errors may be

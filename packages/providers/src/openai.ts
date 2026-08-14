@@ -55,7 +55,8 @@ export function createOpenAIProvider(config: ProviderConfig): ModelProvider {
         {
           method: "POST",
           headers: requestHeaders({ Authorization: `Bearer ${apiKey}` }),
-          body: JSON.stringify(body)
+          body: JSON.stringify(body),
+          ...(request.signal ? { signal: request.signal } : {})
         },
         "OpenAI"
       );

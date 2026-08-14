@@ -209,15 +209,23 @@ async function executeTask(
         maxToolCalls: options.maxToolCalls,
         maxWallClockSeconds: options.maxWallClockSeconds
       },
+      maxContextCharacters: options.maxContextCharacters,
       onEvent: async (event: ShardCodeEvent) => renderEvent(event, io.write, options.json)
     });
-    const session = options.command === "run"
-      ? await runtime.run(options.prompt ?? "")
-      : await runtime.resume(options.sessionId ?? "");
+    const onSigint = () => runtime.abort();
+    process.once("SIGINT", onSigint);
+    let session: Session;
+    try {
+      session = options.command === "run"
+        ? await runtime.run(options.prompt ?? "")
+        : await runtime.resume(options.sessionId ?? "");
+    } finally {
+      process.removeListener("SIGINT", onSigint);
+    }
     if (storedConnection?.verification === "unverified" && session.status !== "failed" && session.status !== "aborted") {
       await providerStore.markVerified(storedConnection.providerId).catch(() => undefined);
     }
-    if (!options.json && session.finalMessage) io.write(session.finalMessage);
+    if (!options.json && session.status === "completed" && session.finalMessage) io.write(session.finalMessage);
     return {
       exitCode: session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1,
       session

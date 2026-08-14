@@ -155,4 +155,30 @@ describe("repository tools", () => {
     expect(matched.output).not.toContain("config/secrets.json");
     expect(matched.output).not.toContain(".git/");
   });
+
+  it("propagates cancellation and bounds command output", async () => {
+    const root = await workspace();
+    let receivedSignal: AbortSignal | undefined;
+    const runtime = new ToolRuntime({
+      workspaceRoot: root,
+      mode: "acceptEdits",
+      maxOutputChars: 1_000,
+      ask: async () => true,
+      sandbox: createProcessSandbox({
+        isolated: true,
+        executor: async (request) => {
+          receivedSignal = request.signal;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return { stdout: "x".repeat(2_000), stderr: "", exitCode: 0 };
+        }
+      })
+    });
+    const controller = new AbortController();
+    const result = await runtime.execute({ id: "shell-2", name: "run_shell", input: { command: "long-output" } }, controller.signal);
+
+    expect(receivedSignal).toBe(controller.signal);
+    expect(result.status).toBe("completed");
+    expect(result.output.length).toBeLessThanOrEqual(1_000);
+    expect(result.output).toContain("output tronqué");
+  });
 });

@@ -1,6 +1,7 @@
 export type PermissionLevel = "allow" | "ask" | "deny";
 export type PermissionMode = "ask" | "acceptEdits" | "bypass";
 export type ToolRisk = "read" | "write" | "shell" | "git" | "network";
+export type ToolExecutionMode = "sequential" | "parallel";
 
 export interface PermissionRule {
   tool?: string;
@@ -32,6 +33,8 @@ export interface ToolDefinition {
   name: string;
   description: string;
   risk: ToolRisk;
+  /** Parallel is only a hint; the runtime may still serialize unsafe tools. */
+  executionMode?: ToolExecutionMode;
   inputSchema: Record<string, unknown>;
 }
 
@@ -84,6 +87,7 @@ export interface ModelRequest {
   tools: ToolDefinition[];
   maxOutputTokens?: number;
   temperature?: number;
+  signal?: AbortSignal;
 }
 
 export type ModelFinishReason = "stop" | "tool_call" | "length" | "unknown";
@@ -103,7 +107,7 @@ export interface ModelProvider {
 
 export interface ToolInvoker {
   definitions(): ToolDefinition[];
-  execute(call: ToolCall): Promise<ToolResult>;
+  execute(call: ToolCall, signal?: AbortSignal): Promise<ToolResult>;
 }
 
 export interface StorageAdapter {
@@ -130,7 +134,8 @@ export type ToolExecutionStatus =
   | "ask_pending"
   | "executing"
   | "completed"
-  | "failed";
+  | "failed"
+  | "denied";
 
 export interface Subtask {
   id: string;
@@ -274,6 +279,9 @@ export interface ShellRequest {
   cwd: string;
   env?: Record<string, string | undefined>;
   allowLocal?: boolean;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  maxOutputChars?: number;
 }
 
 export interface ShellResult {
@@ -281,4 +289,5 @@ export interface ShellResult {
   stderr: string;
   exitCode: number;
   signal?: string;
+  outputTruncated?: boolean;
 }

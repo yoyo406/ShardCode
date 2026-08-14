@@ -83,6 +83,12 @@ export function renderEvent(event: ShardCodeEvent, write: (line: string) => void
     case "ModelRequestStarted":
       writeHuman("Réflexion en cours…");
       break;
+    case "TurnStarted":
+      write(`[turn] ${String(data.turn ?? "")} started`);
+      break;
+    case "TurnCompleted":
+      write(`[turn] ${String(data.turn ?? "")} completed`);
+      break;
     case "ModelResponseReceived":
       {
         const toolCallCount = typeof data.toolCallCount === "number" ? data.toolCallCount : 0;
@@ -119,6 +125,15 @@ export function renderEvent(event: ShardCodeEvent, write: (line: string) => void
       break;
     case "ValidationStarted":
       writeHuman("Validation…");
+      break;
+    case "ToolDenied":
+      writeHuman(`Accès refusé : ${eventDetail(data, "permission refusée")}`);
+      break;
+    case "ContextCompacted":
+      writeHuman(`Contexte compacté (${String(data.omittedMessages ?? 0)} message(s) omis)`);
+      break;
+    case "AgentAborted":
+      writeHuman(`Exécution interrompue : ${eventDetail(data, "la tâche a été interrompue")}`);
       break;
     case "ValidationPassed":
       writeHuman("Validation réussie");

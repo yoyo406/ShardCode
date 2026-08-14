@@ -131,6 +131,9 @@ inside a container or OS sandbox; it does not create that isolation. When a
 command is launched through pnpm, the repository root is taken from pnpm's
 invocation directory. Set `SHARDCODE_WORKSPACE_ROOT` to override it explicitly.
 
+`bypass` est réservé à un processus déjà isolé. Dans un terminal interactif,
+`ask` ou `acceptEdits` conserve le flux normal de validation.
+
 ## Permissions and settings
 
 Team rules can be committed in `.shardcode/settings.json`; personal overrides
@@ -150,7 +153,8 @@ Budgets are explicit and persisted with each session:
 pnpm shardcode run "..." \
   --max-tokens 100000 \
   --max-tool-calls 100 \
-  --max-wall-clock-seconds 1800
+  --max-wall-clock-seconds 1800 \
+  --max-context-characters 120000
 pnpm shardcode resume <session-id>
 pnpm shardcode run "..." --json
 ```
@@ -163,6 +167,9 @@ failures stop the session cleanly with resumable state.
 
 Optional project guidance can be stored in `SHARDCODE.md`; it is loaded as
 untrusted project data alongside scoped JSON memory.
+The full transcript remains persisted; when the provider view reaches the
+context limit, older user-turn groups are compacted only for the next request.
+Press `Ctrl-C` to abort a run and keep it resumable.
 
 ## Development
 

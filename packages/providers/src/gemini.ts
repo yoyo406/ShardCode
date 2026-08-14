@@ -77,7 +77,8 @@ export function createGeminiProvider(config: ProviderConfig): ModelProvider {
         {
           method: "POST",
           headers: requestHeaders({ "x-goog-api-key": apiKey }),
-          body: JSON.stringify(body)
+          body: JSON.stringify(body),
+          ...(request.signal ? { signal: request.signal } : {})
         },
         "Gemini"
       );
