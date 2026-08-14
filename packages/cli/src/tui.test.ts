@@ -282,6 +282,26 @@ describe("interactive TUI", () => {
     expect(terminal.statuses).not.toContain("error");
   });
 
+  it("sanitizes interactive executor errors to a single line", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+    const hostile = "execution\u001b[2J\u001b]8;;https://evil\u0007\u009b31m\r\n\terror details";
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async () => {
+        throw new Error(hostile);
+      }
+    })).resolves.toBe(1);
+
+    expect(terminal.errors).toHaveLength(1);
+    expect(terminal.errors[0]).toContain("execution");
+    expect(terminal.errors[0]).toContain("error details");
+    expect(terminal.errors[0]).not.toMatch(/[\u001b\u0080-\u009f\r\n\t]/);
+    expect(terminal.statuses).toContain("failed");
+  });
+
   it("accepts legacy buffered output without duplicating live output", async () => {
     const terminal = fakeTerminal(["Run the checks", "/exit"]);
 

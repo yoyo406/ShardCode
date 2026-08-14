@@ -169,6 +169,11 @@ function sanitizeUntrustedOutput(value: string): string {
   return sanitizeTerminalText(value).replace(/[\n\t]/g, " ");
 }
 
+function sanitizeTuiError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return sanitizeTerminalText(message).replace(/[\r\n\t]/g, " ");
+}
+
 function incompleteCsiLength(value: string, index: number, prefixLength: number): number | undefined {
   let cursor = index + prefixLength;
   while (cursor < value.length) {
@@ -357,7 +362,7 @@ async function runRequest(
     terminal.setStatus(result.session?.status ?? (result.exitCode === 0 ? "completed" : "failed"));
     return result;
   } catch (error) {
-    terminal.error(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
+    terminal.error(sanitizeTuiError(error));
     terminal.setStatus("failed");
     return { exitCode: 1 };
   }
@@ -488,7 +493,7 @@ export async function runInteractiveTui(options: InteractiveTuiOptions): Promise
       writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
     }
   } catch (error) {
-    terminal.error(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
+    terminal.error(sanitizeTuiError(error));
     state.exitCode = 1;
   } finally {
     terminal.finish(state.exitCode);

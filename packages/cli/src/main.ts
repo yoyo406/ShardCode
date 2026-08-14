@@ -67,7 +67,7 @@ export function writeFinalMessage(io: Pick<CliIO, "write">, message: string | un
 
 function sanitizeCliError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return sanitizeTerminalText(message).replace(/\r/g, "");
+  return sanitizeTerminalText(message).replace(/[\r\n\t]/g, " ");
 }
 
 function buildProvider(options: CliOptions, env: Record<string, string | undefined>) {

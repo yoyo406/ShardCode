@@ -171,22 +171,26 @@ describe("CLI lifecycle", () => {
 
   it("sanitizes control-bearing parse errors before the direct error sink", async () => {
     const testIo = io();
-    const hostile = "\u001b[2J\u001b]8;;https://evil\u0007\u009b31m\r";
+    const hostile = "\u001b[2J\u001b]8;;https://evil\u0007\u009b31m\r\n\tparse details";
 
     await expect(runCli(["run", "Run the checks", "--provider", hostile], testIo)).resolves.toBe(2);
 
     expect(testIo.errors).toHaveLength(1);
-    expect(testIo.errors[0]).not.toMatch(/[\u001b\u0080-\u009f\r]/);
+    expect(testIo.errors[0]).toContain("unsupported provider:");
+    expect(testIo.errors[0]).toContain("parse details");
+    expect(testIo.errors[0]).not.toMatch(/[\u001b\u0080-\u009f\r\n\t]/);
   });
 
   it("sanitizes control-bearing runtime errors before the direct error sink", async () => {
     const testIo = io();
-    const hostile = "missing\u001b[2J\u001b]8;;https://evil\u0007\u009b31m\r";
+    const hostile = "missing\u001b[2J\u001b]8;;https://evil\u0007\u009b31m\r\n\truntime details";
 
     await expect(runCli(["resume", hostile, "--provider", "scripted"], testIo)).resolves.toBe(1);
 
     expect(testIo.errors).toHaveLength(1);
-    expect(testIo.errors[0]).not.toMatch(/[\u001b\u0080-\u009f\r]/);
+    expect(testIo.errors[0]).toContain("session not found:");
+    expect(testIo.errors[0]).toContain("runtime details");
+    expect(testIo.errors[0]).not.toMatch(/[\u001b\u0080-\u009f\r\n\t]/);
   });
 
   it("sanitizes final model output at the human output sink", () => {
