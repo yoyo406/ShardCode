@@ -89,6 +89,9 @@ function themeFromEnvironment(env: Record<string, string | undefined>): TuiTheme
 
 export function detectTuiCapabilities(isTTY: boolean, env: Record<string, string | undefined>): TuiCapabilities {
   if (!isTTY) return { colorMode: "none", theme: "dark" };
+  if (env.NO_COLOR !== undefined || env.TERM?.toLowerCase() === "dumb") {
+    return { colorMode: "none", theme: themeFromEnvironment(env) };
+  }
   const colorMode = /^(truecolor|24bit)$/i.test(env.COLORTERM ?? "")
     ? "truecolor"
     : /256color/i.test(env.TERM ?? "")

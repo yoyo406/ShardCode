@@ -25,6 +25,15 @@ describe("TUI theme", () => {
     expect(detectTuiCapabilities(true, { COLORTERM: "24bit" })).toEqual({ colorMode: "truecolor", theme: "dark" });
   });
 
+  it("disables color when NO_COLOR is defined, including an empty value", () => {
+    expect(detectTuiCapabilities(true, { NO_COLOR: "", COLORTERM: "truecolor" }).colorMode).toBe("none");
+    expect(detectTuiCapabilities(true, { NO_COLOR: "1", TERM: "xterm-256color" }).colorMode).toBe("none");
+  });
+
+  it("disables color for dumb terminals", () => {
+    expect(detectTuiCapabilities(true, { TERM: "dumb", COLORTERM: "truecolor" }).colorMode).toBe("none");
+  });
+
   it("chooses the nearest grayscale candidate for a near-gray tone", () => {
     expect(styleTuiText("gray", "normal", { colorMode: "ansi256", theme: "dark" })).toBe("\u001b[38;5;255mgray\u001b[39m");
   });
