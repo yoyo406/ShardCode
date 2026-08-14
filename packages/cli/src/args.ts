@@ -168,6 +168,8 @@ export const HELP_TEXT = `ShardCode - autonomous coding CLI
 Usage:
   shard [options]                         interactive TUI (no command)
   shardcode [options]                     interactive TUI (no command)
+  shard "task description" [options]      run a task directly
+  shardcode "task description" [options]  run a task directly
   shardcode run "task description" [options]
   shardcode resume <session-id> [options]
 

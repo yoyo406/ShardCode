@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline/promises";
-import { parseInteractiveInput, type SlashCommand } from "./slash.js";
+import { parseInteractiveInput, type SlashCommand, type SlashCommandName } from "./slash.js";
 import { sanitizePermissionPrompt } from "./prompts.js";
 import { sanitizeTerminalText } from "./render.js";
 import { detectTuiCapabilities, styleTuiText, type TuiTone } from "./theme.js";
@@ -11,6 +11,20 @@ const SUGGESTIONS = [
   "Run the tests and explain any failures",
   "Review the current changes for risks"
 ] as const;
+
+const HELP_COMMANDS = "Commands: /help [topic] /clear /status /model [model] /permissions [mode] /resume <id> /connect /exit /quit";
+const HELP_DETAILS: Record<SlashCommandName, string> = {
+  help: "/help [topic] — show command help",
+  clear: "/clear — clear visible output and restore the welcome screen",
+  status: "/status — show current session status (read-only)",
+  model: "/model [model] — show the active provider/model (read-only)",
+  permissions: "/permissions [mode] — show the active permission mode (read-only)",
+  resume: "/resume <id> — resume a saved session",
+  connect: "/connect — update the provider connection when available",
+  exit: "/exit or /quit — leave the interactive TUI"
+};
+
+const ANSI_CSI = /\u001b\[[0-?]*[ -/]*[@-~]/y;
 
 export type TuiStyle = (text: string, tone: TuiTone) => string;
 
@@ -107,7 +121,7 @@ export function renderTuiWelcome(
     line("Workspace:", workspaceRoot, "info", style),
     line("Provider:", `${info.provider} / ${info.model}`, "accent", style),
     line("Try:", suggestion, "accent", style),
-    paint("Type a task, or /help for commands.", "normal", style)
+    paint("Type a task, or /help for commands. Use /exit (or /quit) to leave.", "normal", style)
   ];
 }
 
@@ -134,9 +148,36 @@ export function renderTuiFooter(
   ];
 }
 
+function truncateHistoryLine(value: string): string {
+  let result = "";
+  let index = 0;
+  let visibleCharacters = 0;
+  let hasAnsi = false;
+
+  while (index < value.length) {
+    ANSI_CSI.lastIndex = index;
+    const ansi = ANSI_CSI.exec(value)?.[0];
+    if (ansi) {
+      result += ansi;
+      index += ansi.length;
+      hasAnsi = true;
+      continue;
+    }
+    if (value[index] === "\u001b" || visibleCharacters >= MAX_HISTORY_LINE_LENGTH) break;
+    const codePoint = value.codePointAt(index)!;
+    const character = String.fromCodePoint(codePoint);
+    result += character;
+    index += character.length;
+    visibleCharacters += 1;
+  }
+
+  if (index < value.length && hasAnsi && !result.endsWith("\u001b[39m")) result += "\u001b[39m";
+  return result;
+}
+
 function appendHistory(history: string[], value: string): void {
   for (const valueLine of value.split("\n")) {
-    history.push(valueLine.slice(0, MAX_HISTORY_LINE_LENGTH));
+    history.push(truncateHistoryLine(valueLine));
   }
   if (history.length > MAX_HISTORY_LINES) history.splice(0, history.length - MAX_HISTORY_LINES);
 }
@@ -167,8 +208,8 @@ function writeSessionHeader(terminal: TuiTerminal, session: TuiSessionSnapshot |
   if (session?.sessionId) writeTuiLine(terminal, paint(`Session ${session.sessionId}`, "primary", terminal.style));
 }
 
-function writeHelp(terminal: TuiTerminal): void {
-  writeTuiLine(terminal, paint("/help /clear /status /model /permissions /resume <id> /connect /exit", "normal", terminal.style));
+function writeHelp(terminal: TuiTerminal, topic?: SlashCommandName): void {
+  writeTuiLine(terminal, paint(topic ? HELP_DETAILS[topic] : HELP_COMMANDS, "normal", terminal.style));
 }
 
 function writeCommandStatus(
@@ -231,7 +272,7 @@ async function handleCommand(
     case "exit":
       return true;
     case "help":
-      writeHelp(terminal);
+      writeHelp(terminal, command.topic);
       return false;
     case "clear":
       history.length = 0;

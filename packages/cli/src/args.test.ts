@@ -52,6 +52,7 @@ describe("CLI arguments", () => {
   it("documents the no-argument interactive mode in help", () => {
     expect(HELP_TEXT).toContain("shard [options]");
     expect(HELP_TEXT).toContain("shardcode [options]");
+    expect(HELP_TEXT).toContain('shardcode "task description" [options]');
     expect(HELP_TEXT).toContain("interactive TUI");
   });
 });

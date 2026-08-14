@@ -84,6 +84,8 @@ describe("interactive TUI", () => {
 
     expect(welcome).toContain("ShardCode");
     expect(welcome).toContain("Run the tests");
+    expect(welcome).toContain("/exit");
+    expect(welcome).toContain("/quit");
     expect(footer).toContain("acceptEdits");
     expect(footer).toContain("scripted / scripted-local");
     expect(footer).toContain("/repo");
@@ -110,6 +112,40 @@ describe("interactive TUI", () => {
     expect(terminal.clearCount).toBe(1);
     expect(terminal.finished).toEqual([0]);
     expect(terminal.closed).toBe(1);
+  });
+
+  it("renders topic-specific help and a complete generic command list", async () => {
+    const terminal = fakeTerminal(["/help model", "/help", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async () => ({ exitCode: 0 })
+    })).resolves.toBe(0);
+
+    expect(terminal.output).toContain("/model [model] — show the active provider/model (read-only)");
+    expect(terminal.output.some((line) => line.includes("/exit") && line.includes("/quit"))).toBe(true);
+  });
+
+  it("bounds styled history by visible characters and keeps a complete reset", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+    const prefix = "\u001b[38;2;224;108;117m";
+    const reset = "\u001b[39m";
+    terminal.style = (text) => `${prefix}${text}${reset}`;
+    const longStyledLine = terminal.style("x".repeat(5_000), "error");
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async () => ({ exitCode: 0, output: [longStyledLine] })
+    })).resolves.toBe(0);
+
+    const outputLine = terminal.output.find((line) => line.startsWith(prefix) && line.length >= 4_000);
+    expect(outputLine).toBeDefined();
+    expect(outputLine).toMatch(/\u001b\[39m$/);
+    expect(outputLine?.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")).toHaveLength(4_000);
   });
 
   it("shows live output and the running footer before execution completes", async () => {
