@@ -112,6 +112,70 @@ describe("interactive TUI", () => {
     expect(terminal.closed).toBe(1);
   });
 
+  it("shows live output and the running footer before execution completes", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+    let release: (() => void) | undefined;
+    let started: (() => void) | undefined;
+    const execution = runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onOutput?.("live event");
+        started?.();
+        await new Promise<void>((resolve) => { release = resolve; });
+        return { exitCode: 0, session: snapshot() };
+      }
+    });
+
+    await new Promise<void>((resolve) => { started = resolve; });
+
+    expect(terminal.output).toContain("live event");
+    expect(terminal.output.some((line) => line.includes("Status:") && line.includes("running"))).toBe(true);
+
+    release?.();
+    await expect(execution).resolves.toBe(0);
+  });
+
+  it("accepts legacy buffered output without duplicating live output", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onOutput?.("shared output");
+        return { exitCode: 0, session: snapshot(), output: ["shared output"] };
+      }
+    })).resolves.toBe(0);
+
+    expect(terminal.output.filter((line) => line === "shared output")).toHaveLength(1);
+  });
+
+  it("retains the effective resumed provider, model, permissions, and aborted status", async () => {
+    const terminal = fakeTerminal(["/resume saved-session", "/model", "/permissions", "/status", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async () => ({
+        exitCode: 130,
+        provider: "anthropic",
+        model: "saved-model",
+        permissionMode: "ask",
+        session: { sessionId: "saved-session", status: "aborted" }
+      })
+    })).resolves.toBe(130);
+
+    const output = terminal.output.join("\n");
+    expect(output).toContain("Model: anthropic / saved-model");
+    expect(output).toContain("Permissions: ask");
+    expect(output).toContain("Status: aborted");
+    expect(output).not.toContain("Status: failed");
+  });
+
   it("fails closed without a TTY and never calls the executor", async () => {
     const terminal = fakeTerminal([], false);
     let executed = false;
@@ -161,6 +225,16 @@ describe("interactive TUI", () => {
     await expect(confirmed).resolves.toBe(true);
     expect(streams.outputText()).toContain("\u001b[38;2;245;167;66mrun_shell: pnpm test\u001b[39m [y/N] ");
     expect(streams.outputText()).not.toContain("\u001b[31m");
+    terminal.close();
+  });
+
+  it("uses plain styling when output is not a TTY", () => {
+    const streams = fakeTtyStreams();
+    streams.output.isTTY = false;
+    const terminal = createDefaultTuiTerminal({ ...streams, env: { COLORTERM: "truecolor" } });
+
+    expect(terminal.isTTY).toBe(false);
+    expect(terminal.style?.("ShardCode", "primary")).toBe("ShardCode");
     terminal.close();
   });
 

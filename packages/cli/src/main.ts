@@ -25,13 +25,11 @@ export interface CliIO {
 }
 
 interface TuiExecutionIO {
-  output: string[];
   write(line: string): void;
 }
 
-function createTuiExecutionIO(): TuiExecutionIO {
-  const output: string[] = [];
-  return { output, write: (line) => output.push(line) };
+function createTuiExecutionIO(emit: (line: string) => void): TuiExecutionIO {
+  return { write: emit };
 }
 
 function defaultIO(): CliIO {
@@ -123,14 +121,14 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
       mode: options.permissionMode,
       isolatedEnvironment: options.isolatedEnvironment,
       ask: async (request, decision) => {
-        const question = `${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`;
-        if (tui) return tui.confirm(sanitizeTerminalText(question));
+        const question = sanitizeTerminalText(`${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`);
+        if (tui) return tui.confirm(question);
         return io.ask ? io.ask(question, request, decision) : false;
       }
     });
     const sessionStore = new JsonSessionStore(toolRuntime.storage());
 
-    const executeTask = async (request: InteractiveTaskRequest): Promise<InteractiveTaskResult> => {
+    const executeTask = async (request: InteractiveTaskRequest, callbacks?: { onOutput?: (line: string) => void }): Promise<InteractiveTaskResult> => {
       let providerOptions = options;
       if (request.kind === "resume" && !options.providerExplicit) {
         const existing = await sessionStore.load(request.sessionId);
@@ -143,7 +141,7 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
           };
         }
       }
-      const taskIO = tui ? createTuiExecutionIO() : undefined;
+      const taskIO = tui && callbacks?.onOutput ? createTuiExecutionIO(callbacks.onOutput) : undefined;
       const runtime = new AgentRuntime({
         provider: buildProvider(providerOptions, io.env),
         tools: toolRuntime,
@@ -171,12 +169,20 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
         writeFinalMessage(taskIO, session.finalMessage, false);
         return {
           exitCode,
+          provider: session.provider,
+          model: session.model,
+          permissionMode: toolRuntime.mode,
           session: { sessionId: session.id, status: session.status },
-          output: taskIO.output
         };
       }
       writeFinalMessage(io, session.finalMessage, options.json);
-      return { exitCode, session: { sessionId: session.id, status: session.status } };
+      return {
+        exitCode,
+        provider: session.provider,
+        model: session.model,
+        permissionMode: toolRuntime.mode,
+        session: { sessionId: session.id, status: session.status }
+      };
     };
 
     if (options.command === "interactive") {

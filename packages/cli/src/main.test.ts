@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runCli, writeFinalMessage, type CliIO } from "./main.js";
 import type { TuiTerminal } from "./tui.js";
@@ -56,6 +59,80 @@ describe("CLI lifecycle", () => {
     expect(terminal.output.some((line) => line.includes("Last session"))).toBe(true);
     expect(terminal.finished).toEqual([0]);
     expect(terminal.closed).toBe(1);
+  });
+
+  it("streams interactive events and the running footer before a pending approval resolves", async () => {
+    const testIo = io();
+    const terminal = tuiTerminal(["Run the checks", "/exit"]);
+    testIo.tui = terminal;
+    let approve: (() => void) | undefined;
+    let asked: (() => void) | undefined;
+    terminal.confirm = async () => {
+      asked?.();
+      await new Promise<void>((resolve) => { approve = resolve; });
+      return true;
+    };
+
+    const run = runCli(["--provider", "scripted", "--permission-mode", "acceptEdits"], testIo);
+    await new Promise<void>((resolve) => { asked = resolve; });
+
+    expect(terminal.output.some((line) => line.includes("[session] started"))).toBe(true);
+    expect(terminal.output.some((line) => line.includes("Status:") && line.includes("running"))).toBe(true);
+
+    approve?.();
+    await expect(run).resolves.toBe(0);
+  });
+
+  it("uses the saved session provider and model in the resumed TUI snapshot", async () => {
+    const root = await mkdtemp(join(tmpdir(), "shardcode-cli-resume-"));
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    await mkdir(join(root, ".shardcode", "sessions"), { recursive: true });
+    await writeFile(join(root, ".shardcode", "sessions", `${sessionId}.json`), JSON.stringify({
+      id: sessionId,
+      provider: "anthropic",
+      model: "saved-model",
+      status: "completed"
+    }));
+    const testIo = io();
+    testIo.cwd = root;
+    testIo.env = { ANTHROPIC_API_KEY: "test-key" };
+    const terminal = tuiTerminal([`/resume ${sessionId}`, "/model", "/status", "/exit"]);
+    testIo.tui = terminal;
+
+    await expect(runCli([], testIo)).resolves.toBe(0);
+
+    const output = terminal.output.join("\n");
+    expect(output).toContain("Model: anthropic / saved-model");
+    expect(output).toContain("Status: completed");
+  });
+
+  it("sanitizes direct permission questions while preserving the raw authorization request", async () => {
+    const root = await mkdtemp(join(tmpdir(), "shardcode-cli-permission-"));
+    await mkdir(join(root, ".shardcode"), { recursive: true });
+    await writeFile(join(root, ".shardcode", "settings.json"), JSON.stringify({
+      rules: [{
+        tool: "run_shell",
+        command: "*",
+        decision: "ask",
+        reason: "review\u001b[2J\rthis command"
+      }]
+    }));
+    const testIo = io();
+    testIo.cwd = root;
+    let question = "";
+    let rawCommand = "";
+    testIo.ask = async (value, request) => {
+      question = value;
+      rawCommand = request?.command ?? "";
+      return true;
+    };
+
+    await expect(runCli(["run", "Run the checks", "--provider", "scripted", "--permission-mode", "acceptEdits"], testIo)).resolves.toBe(0);
+
+    expect(question).toContain("run_shell:");
+    expect(question).toContain("reviewthis command");
+    expect(question).not.toMatch(/[\u001b\r]/);
+    expect(rawCommand).toContain("scripted check");
   });
 
   it("keeps interactive settings truthful when slash commands request changes", async () => {

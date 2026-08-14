@@ -66,15 +66,22 @@ export type InteractiveTaskRequest =
 
 export interface InteractiveTaskResult {
   exitCode: number;
+  provider?: string;
+  model?: string;
+  permissionMode?: string;
   session?: TuiSessionSnapshot;
   output?: readonly string[];
+}
+
+export interface InteractiveTaskCallbacks {
+  onOutput?(line: string): void;
 }
 
 export interface InteractiveTuiOptions {
   terminal: TuiTerminal;
   workspaceRoot: string;
   info: TuiRuntimeInfo;
-  execute(request: InteractiveTaskRequest): Promise<InteractiveTaskResult>;
+  execute(request: InteractiveTaskRequest, callbacks?: InteractiveTaskCallbacks): Promise<InteractiveTaskResult>;
   connect?(): Promise<void> | void;
 }
 
@@ -177,21 +184,39 @@ async function runRequest(
   terminal: TuiTerminal,
   request: InteractiveTaskRequest,
   execute: InteractiveTuiOptions["execute"],
-  history: string[]
+  history: string[],
+  onStatus: (status: string) => void
 ): Promise<InteractiveTaskResult> {
   terminal.setStatus("running");
+  onStatus("running");
   try {
-    const result = await execute(request);
-    for (const output of result.output ?? []) writeHistoryLine(terminal, history, output);
-    terminal.setStatus(result.exitCode === 0 ? "completed" : "failed");
+    let receivedLiveOutput = false;
+    const result = await execute(request, {
+      onOutput: (output) => {
+        receivedLiveOutput = true;
+        writeHistoryLine(terminal, history, output);
+      }
+    });
+    if (!receivedLiveOutput) {
+      for (const output of result.output ?? []) writeHistoryLine(terminal, history, output);
+    }
+    terminal.setStatus(result.session?.status ?? (result.exitCode === 0 ? "completed" : "failed"));
     return result;
   } catch (error) {
     terminal.error(sanitizeTerminalText(error instanceof Error ? error.message : String(error)));
     terminal.setStatus("error");
     return { exitCode: 1 };
-  } finally {
-    terminal.setStatus("waiting");
   }
+}
+
+function applyExecutionSnapshot(info: { permissionMode: string; provider: string; model: string }, result: InteractiveTaskResult): void {
+  if (result.provider !== undefined) info.provider = result.provider;
+  if (result.model !== undefined) info.model = result.model;
+  if (result.permissionMode !== undefined) info.permissionMode = result.permissionMode;
+}
+
+function executionStatus(result: InteractiveTaskResult): string {
+  return result.session?.status ?? (result.exitCode === 0 ? "completed" : "failed");
 }
 
 async function handleCommand(
@@ -239,11 +264,19 @@ async function handleCommand(
       writeTuiLine(terminal, paint("Connection updated.", "success", terminal.style));
       return false;
     case "resume": {
-      const result = await runRequest(terminal, { kind: "resume", sessionId: command.sessionId }, options.execute, history);
+      const result = await runRequest(
+        terminal,
+        { kind: "resume", sessionId: command.sessionId },
+        options.execute,
+        history,
+        (status) => writeCommandStatus(terminal, workspaceRoot, state.info, state.session, status)
+      );
       state.exitCode = result.exitCode;
+      applyExecutionSnapshot(state.info, result);
       state.session = result.session ?? state.session;
-      state.status = result.exitCode === 0 ? "waiting" : "failed";
+      state.status = executionStatus(result);
       writeSessionHeader(terminal, state.session);
+      writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
       return false;
     }
   }
@@ -285,10 +318,17 @@ export async function runInteractiveTui(options: InteractiveTuiOptions): Promise
         continue;
       }
 
-      const result = await runRequest(terminal, { kind: "run", prompt: parsed.prompt }, options.execute, history);
+      const result = await runRequest(
+        terminal,
+        { kind: "run", prompt: parsed.prompt },
+        options.execute,
+        history,
+        (status) => writeCommandStatus(terminal, workspaceRoot, state.info, state.session, status)
+      );
       state.exitCode = result.exitCode;
+      applyExecutionSnapshot(state.info, result);
       state.session = result.session ?? state.session;
-      state.status = result.exitCode === 0 ? "waiting" : "failed";
+      state.status = executionStatus(result);
       state.suggestionIndex = (state.suggestionIndex + 1) % SUGGESTIONS.length;
       writeSessionHeader(terminal, state.session);
       writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
@@ -315,7 +355,7 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
   const output = options.output ?? process.stdout;
   const errorOutput = options.errorOutput ?? process.stderr;
   const readline = createInterface({ input, output, terminal: false });
-  const capabilities = detectTuiCapabilities(Boolean(input.isTTY), options.env ?? process.env);
+  const capabilities = detectTuiCapabilities(Boolean(input.isTTY && output.isTTY), options.env ?? process.env);
   const pendingLines: string[] = [];
   const style: TuiStyle = (text, tone) => styleTuiText(text, tone, capabilities);
   let cancelActiveSecret: (() => void) | undefined;
