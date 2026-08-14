@@ -146,6 +146,19 @@ describe("interactive TUI", () => {
     terminal.close();
   });
 
+  it("sanitizes and warns on confirmation labels without styling the decision suffix", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: { COLORTERM: "truecolor" } });
+
+    const confirmed = terminal.confirm("\u001b[31mrun_shell: pnpm test\u001b[0m");
+    streams.input.write("y\n");
+
+    await expect(confirmed).resolves.toBe(true);
+    expect(streams.outputText()).toContain("\u001b[38;2;245;167;66mrun_shell: pnpm test\u001b[39m [y/N] ");
+    expect(streams.outputText()).not.toContain("\u001b[31m");
+    terminal.close();
+  });
+
   it("restores raw mode when secret input is cancelled or the terminal closes", async () => {
     const streams = fakeTtyStreams();
     const terminal = createDefaultTuiTerminal({ ...streams, env: {} });

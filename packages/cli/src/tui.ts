@@ -310,7 +310,9 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
     style,
     open: async () => undefined,
     question: normalQuestion,
-    confirm: async (prompt) => /^(y|yes|o|oui)$/i.test((await normalQuestion(`${prompt} [y/N] `)).trim()),
+    confirm: async (prompt) => /^(y|yes|o|oui)$/i.test(
+      (await normalQuestion(`${style(sanitizeTerminalText(prompt), "warning")} [y/N] `)).trim()
+    ),
     secret: async (prompt) => {
       if (!input.isTTY || typeof input.setRawMode !== "function") return normalQuestion(prompt);
 
