@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { ToolExecutionError } from "@shardcode/shared";
 import type { ShellRequest, ShellResult } from "@shardcode/shared";
 
@@ -13,6 +13,24 @@ export interface ProcessSandboxOptions {
   executor?: (request: ShellRequest) => Promise<ShellResult>;
 }
 
+function terminateProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (pid === undefined) {
+    child.kill(signal);
+    return;
+  }
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    killer.on("error", () => child.kill(signal));
+    return;
+  }
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    child.kill(signal);
+  }
+}
+
 function executeLocal(request: ShellRequest): Promise<ShellResult> {
   if (request.signal?.aborted) {
     return Promise.resolve({ stdout: "", stderr: "command aborted", exitCode: 130, signal: "SIGTERM" });
@@ -22,6 +40,7 @@ function executeLocal(request: ShellRequest): Promise<ShellResult> {
       cwd: request.cwd,
       env: { ...process.env, ...request.env },
       shell: true,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"]
     });
     let stdout = "";
@@ -35,8 +54,8 @@ function executeLocal(request: ShellRequest): Promise<ShellResult> {
     const terminate = (reason: "aborted" | "timeout") => {
       if (settled || termination) return;
       termination = reason;
-      child.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 250);
+      terminateProcessTree(child, "SIGTERM");
+      forceKillTimer = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 250);
     };
 
     const cleanup = () => {

@@ -64,6 +64,36 @@ class ParallelTools implements ToolInvoker {
   }
 }
 
+class AbortableParallelTools implements ToolInvoker {
+  started = 0;
+
+  definitions(): ToolDefinition[] {
+    return [
+      { name: "read_file", description: "read", risk: "read", executionMode: "parallel", inputSchema: { type: "object" } }
+    ];
+  }
+
+  async execute(_call: ToolCall, signal?: AbortSignal): Promise<ToolResult> {
+    this.started += 1;
+    return new Promise((_resolve, reject) => {
+      const abort = () => reject(new Error("tool stopped"));
+      if (signal?.aborted) {
+        abort();
+        return;
+      }
+      signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("condition was not reached");
+}
+
 describe("Pi-inspired runtime controls", () => {
   it("executes independent read tools concurrently but preserves their result order", async () => {
     const provider = new SequenceProvider([
@@ -114,6 +144,51 @@ describe("Pi-inspired runtime controls", () => {
     expect(receivedSignal?.aborted).toBe(true);
     expect(session.status).toBe("aborted");
     expect(session.rootTask.error).toContain("provider");
+  });
+
+  it("records an aborted result for every parallel tool before persisting", async () => {
+    const provider = new SequenceProvider([
+      response("inspect", [call("read-1", "read_file", { path: "a.ts" }), call("read-2", "read_file", { path: "b.ts" })])
+    ]);
+    const tools = new AbortableParallelTools();
+    const runtime = new AgentRuntime({
+      provider,
+      tools,
+      sessionStore: new InMemorySessionStore(),
+      workspaceRoot: "/repo",
+      budget: { maxTokens: 1_000, maxToolCalls: 5, maxWallClockSeconds: 60 }
+    });
+
+    const running = runtime.run("Inspect this task");
+    await waitFor(() => tools.started === 2);
+    runtime.abort();
+    const session = await running;
+
+    expect(session.status).toBe("aborted");
+    expect(session.messages.filter((message) => message.role === "tool")).toHaveLength(2);
+    expect(session.rootTask.toolExecutions?.every((execution) => execution.result?.error?.code === "ABORTED")).toBe(true);
+  });
+
+  it("keeps transformed provider context within the configured limit", async () => {
+    const provider = new SequenceProvider([
+      response("validate", [call("check-1", "run_shell", { command: "pnpm test" })]),
+      response("SHARDCODE_VALIDATED: checks passed")
+    ]);
+    const session = await new AgentRuntime({
+      provider,
+      tools: new ParallelTools(),
+      sessionStore: new InMemorySessionStore(),
+      workspaceRoot: "/repo",
+      budget: { maxTokens: 1_000, maxToolCalls: 5, maxWallClockSeconds: 60 },
+      maxContextCharacters: 600,
+      contextTransform: async (messages) => [
+        ...messages,
+        { role: "user", content: "transform expansion ".repeat(500) }
+      ]
+    }).run("Validate this task");
+
+    expect(session.status).toBe("completed");
+    expect(provider.requests.every((request) => JSON.stringify(request.messages).length <= 600)).toBe(true);
   });
 
   it("supports pre-execution blocking and post-execution result normalization", async () => {

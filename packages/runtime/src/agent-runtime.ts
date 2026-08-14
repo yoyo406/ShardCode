@@ -357,10 +357,11 @@ export class AgentRuntime {
   }
 
   private async prepareModelMessages(session: Session, signal: AbortSignal): Promise<ModelMessage[]> {
-    const compacted = compactContext(session.messages, {
+    const contextOptions = {
       maxCharacters: this.options.maxContextCharacters ?? 120_000,
       ...(this.options.contextKeepRecentGroups !== undefined ? { keepRecentGroups: this.options.contextKeepRecentGroups } : {})
-    });
+    };
+    const compacted = compactContext(session.messages, contextOptions);
     if (compacted.compacted) {
       await this.emit(session, "ContextCompacted", {
         originalCharacters: compacted.originalCharacters,
@@ -370,7 +371,17 @@ export class AgentRuntime {
     }
     this.throwIfAborted(signal);
     if (!this.options.contextTransform) return compacted.messages;
-    return this.options.contextTransform(compacted.messages, signal);
+    const transformed = await this.options.contextTransform(compacted.messages, signal);
+    this.throwIfAborted(signal);
+    const bounded = compactContext(transformed, contextOptions);
+    if (bounded.compacted) {
+      await this.emit(session, "ContextCompacted", {
+        originalCharacters: bounded.originalCharacters,
+        finalCharacters: bounded.finalCharacters,
+        omittedMessages: bounded.omittedMessages
+      });
+    }
+    return bounded.messages;
   }
 
   private async executeToolBatch(
@@ -414,7 +425,16 @@ export class AgentRuntime {
         const definition = definitions.find((candidate) => candidate.name === call.name);
         return definition?.executionMode === "parallel" && (definition.risk === "read" || definition.risk === "git");
       });
-    if (canParallelize) return Promise.all(calls.map((call, index) => execute(call, executions[index]!)));
+    if (canParallelize) {
+      return Promise.all(calls.map(async (call, index) => {
+        try {
+          return await execute(call, executions[index]!);
+        } catch (error) {
+          if (!signal.aborted) throw error;
+          return this.abortedToolResult(call);
+        }
+      }));
+    }
 
     const results: ToolResult[] = [];
     for (const [index, call] of calls.entries()) {
@@ -422,6 +442,17 @@ export class AgentRuntime {
       this.throwIfAborted(signal);
     }
     return results;
+  }
+
+  private abortedToolResult(call: ToolCall): ToolResult {
+    const message = "tool execution was aborted";
+    return {
+      callId: call.id,
+      toolName: call.name,
+      status: "failed",
+      output: message,
+      error: { code: "ABORTED", message }
+    };
   }
 
   private async completeWithProviderRetry(request: ModelRequest, signal: AbortSignal): Promise<ModelResponse> {

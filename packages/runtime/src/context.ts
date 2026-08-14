@@ -18,7 +18,7 @@ function messageCharacters(message: ModelMessage): number {
 }
 
 function totalCharacters(messages: ModelMessage[]): number {
-  return messages.reduce((total, message) => total + messageCharacters(message), 0);
+  return JSON.stringify(messages).length;
 }
 
 function truncateMessage(message: ModelMessage, budget: number): ModelMessage | undefined {
@@ -48,12 +48,19 @@ function fitGroup(group: ModelMessage[], budget: number): ModelMessage[] {
 
 function fitMessages(messages: ModelMessage[], budget: number): ModelMessage[] {
   const fitted: ModelMessage[] = [];
-  let remaining = budget;
   for (const message of messages) {
+    const candidate = [...fitted, message];
+    if (totalCharacters(candidate) <= budget) {
+      fitted.push(message);
+      continue;
+    }
+    const arrayOverhead = fitted.length > 0 ? 1 : 2;
+    const remaining = budget - totalCharacters(fitted) - arrayOverhead;
     const next = truncateMessage(message, remaining);
     if (!next) break;
-    fitted.push(next);
-    remaining -= messageCharacters(next);
+    const truncated = [...fitted, next];
+    if (totalCharacters(truncated) <= budget) fitted.push(next);
+    break;
   }
   return fitted;
 }
