@@ -73,7 +73,8 @@ export function createAnthropicProvider(config: ProviderConfig): ModelProvider {
               : { Authorization: `Bearer ${apiKey}` }),
             "anthropic-version": "2023-06-01"
           }),
-          body: JSON.stringify(body)
+          body: JSON.stringify(body),
+          ...(request.signal ? { signal: request.signal } : {})
         },
         "Anthropic"
       );

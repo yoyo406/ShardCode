@@ -109,6 +109,9 @@ export async function fetchJson(
   let lastError: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
+      if (init.signal?.aborted) {
+        throw init.signal.reason instanceof Error ? init.signal.reason : new Error("provider request aborted");
+      }
       const response = await fetcher(url, init);
       const text = await response.text();
       let body: unknown = {};
@@ -127,17 +130,20 @@ export async function fetchJson(
         const message = asString(asRecord(asRecord(body).error).message) ?? `${provider} request failed (${response.status})`;
         const retryable = response.status === 429 || response.status >= 500;
         if (retryable && attempt + 1 < maxAttempts) {
-          await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
+          await abortableDelay(100 * 2 ** attempt, init.signal);
           continue;
         }
         throw new ProviderError(message, { retryable, statusCode: response.status });
       }
       return asRecord(body);
     } catch (error) {
+      if (init.signal?.aborted) {
+        throw init.signal.reason instanceof Error ? init.signal.reason : new Error("provider request aborted");
+      }
       if (error instanceof ProviderError) throw error;
       lastError = error;
       if (attempt + 1 < maxAttempts) {
-        await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
+        await abortableDelay(100 * 2 ** attempt, init.signal);
         continue;
       }
     }
@@ -154,4 +160,22 @@ export function requireApiKey(config: ProviderConfig): string {
 
 export function requestHeaders(headers: Record<string, string>): HeadersInit {
   return { "content-type": "application/json", ...headers };
+}
+
+function abortableDelay(milliseconds: number, signal: AbortSignal | null | undefined): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error("provider request aborted"));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("provider request aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }

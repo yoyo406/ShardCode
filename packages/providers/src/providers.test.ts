@@ -163,4 +163,24 @@ describe("normalized providers", () => {
     await expect(provider.complete(request)).resolves.toEqual(first);
     await expect(provider.complete(request)).resolves.toEqual(second);
   });
+
+  it("forwards cancellation to the provider transport", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | null | undefined;
+    const provider = createProvider({
+      provider: "openai",
+      model: request.model,
+      apiKey: "test-key",
+      fetch: async (_input, init) => {
+        receivedSignal = init?.signal;
+        return jsonResponse({
+          choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }]
+        });
+      }
+    });
+
+    await provider.complete({ ...request, signal: controller.signal });
+
+    expect(receivedSignal).toBe(controller.signal);
+  });
 });

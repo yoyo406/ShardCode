@@ -16,6 +16,7 @@ export interface CliOptions {
   maxTokens: number;
   maxToolCalls: number;
   maxWallClockSeconds: number;
+  maxContextCharacters: number;
   json: boolean;
   isolatedEnvironment: boolean;
 }
@@ -26,7 +27,8 @@ const DEFAULTS = {
   permissionMode: "ask" as const,
   maxTokens: 100_000,
   maxToolCalls: 100,
-  maxWallClockSeconds: 1_800
+  maxWallClockSeconds: 1_800,
+  maxContextCharacters: 120_000
 };
 
 const SUPPORTED_PROVIDERS: readonly CliProvider[] = [
@@ -70,6 +72,7 @@ export function parseArgs(argv: string[]): CliOptions {
       maxTokens: DEFAULTS.maxTokens,
       maxToolCalls: DEFAULTS.maxToolCalls,
       maxWallClockSeconds: DEFAULTS.maxWallClockSeconds,
+      maxContextCharacters: DEFAULTS.maxContextCharacters,
       json: false,
       isolatedEnvironment: false
     };
@@ -88,6 +91,7 @@ export function parseArgs(argv: string[]): CliOptions {
   let maxTokens = DEFAULTS.maxTokens;
   let maxToolCalls = DEFAULTS.maxToolCalls;
   let maxWallClockSeconds = DEFAULTS.maxWallClockSeconds;
+  let maxContextCharacters = DEFAULTS.maxContextCharacters;
   let json = false;
   let isolatedEnvironment = false;
 
@@ -140,6 +144,12 @@ export function parseArgs(argv: string[]): CliOptions {
         index = next;
         break;
       }
+      case "--max-context-characters": {
+        const [value, next] = nextValue(argv, index, argument);
+        maxContextCharacters = numberOption(argument, value);
+        index = next;
+        break;
+      }
       case "--json":
         json = true;
         break;
@@ -158,6 +168,7 @@ export function parseArgs(argv: string[]): CliOptions {
           maxTokens,
           maxToolCalls,
           maxWallClockSeconds,
+          maxContextCharacters,
           json,
           isolatedEnvironment
         };
@@ -180,6 +191,7 @@ export function parseArgs(argv: string[]): CliOptions {
     maxTokens,
     maxToolCalls,
     maxWallClockSeconds,
+    maxContextCharacters,
     json,
     isolatedEnvironment
   };
@@ -201,6 +213,7 @@ Options:
   --max-tokens <number>
   --max-tool-calls <number>
   --max-wall-clock-seconds <number>
+  --max-context-characters <number>
   --isolated-environment   required for bypass mode
   --json                    render JSONL events
   --help`;
