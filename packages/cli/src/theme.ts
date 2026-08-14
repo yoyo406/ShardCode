@@ -42,9 +42,30 @@ function distance(a: Rgb, b: Rgb): number {
 }
 
 function ansi256Index(rgb: Rgb): number {
-  if (rgb[0] === rgb[1] && rgb[1] === rgb[2]) return 232 + Math.max(0, Math.min(23, Math.round((rgb[0] - 8) / 10)));
-  const quantize = (value: number) => Math.max(0, Math.min(5, Math.round(value / 255 * 5)));
-  return 16 + quantize(rgb[0]) * 36 + quantize(rgb[1]) * 6 + quantize(rgb[2]);
+  const levels = [0, 95, 135, 175, 215, 255];
+  let bestIndex = 16;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let red = 0; red < 6; red += 1) {
+    for (let green = 0; green < 6; green += 1) {
+      for (let blue = 0; blue < 6; blue += 1) {
+        const candidate: Rgb = [levels[red]!, levels[green]!, levels[blue]!];
+        const candidateDistance = distance(rgb, candidate);
+        if (candidateDistance < bestDistance) {
+          bestIndex = 16 + red * 36 + green * 6 + blue;
+          bestDistance = candidateDistance;
+        }
+      }
+    }
+  }
+  for (let gray = 0; gray < 24; gray += 1) {
+    const value = 8 + gray * 10;
+    const candidateDistance = distance(rgb, [value, value, value]);
+    if (candidateDistance < bestDistance) {
+      bestIndex = 232 + gray;
+      bestDistance = candidateDistance;
+    }
+  }
+  return bestIndex;
 }
 
 function ansi16Index(rgb: Rgb): number {
@@ -57,7 +78,7 @@ function ansi16Index(rgb: Rgb): number {
       best = index;
     }
   });
-  return best < 8 && (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000 > 128 ? best + 8 : best;
+  return best;
 }
 
 function themeFromEnvironment(env: Record<string, string | undefined>): TuiThemeName {
@@ -83,6 +104,9 @@ export function styleTuiText(text: string, tone: TuiTone, capabilities: TuiCapab
     ? `\u001b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m`
     : capabilities.colorMode === "ansi256"
       ? `\u001b[38;5;${ansi256Index(rgb)}m`
-      : `\u001b[${ansi16Index(rgb) < 8 ? 30 + ansi16Index(rgb) : 90 + ansi16Index(rgb) - 8}m`;
+      : (() => {
+        const index = ansi16Index(rgb);
+        return `\u001b[${index < 8 ? 30 + index : 90 + index - 8}m`;
+      })();
   return `${prefix}${text}\u001b[39m`;
 }
