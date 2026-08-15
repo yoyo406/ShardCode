@@ -1,116 +1,117 @@
+import { PassThrough } from "node:stream";
+import { createEvent } from "@shardcode/shared";
 import { describe, expect, it } from "vitest";
 import {
+  createDefaultTuiTerminal,
+  renderTuiFooter,
+  renderTuiWelcome,
   runInteractiveTui,
   secretInputRemainder,
   type InteractiveTaskRequest,
-  type TuiExecutionResult,
+  type TuiRuntimeInfo,
   type TuiSessionSnapshot,
-  type TuiTerminal,
-  type TuiConnectionOption,
-  type TuiConnectionResult
+  type TuiTerminal
 } from "./tui.js";
+import { renderEvent } from "./render.js";
 
-function fakeTerminal(answers: string[], isTTY = true): TuiTerminal & {
-  opened: string[];
-  questions: string[];
-  confirmations: string[];
-  lines: string[];
-  errors: string[];
-  finished: number[];
-    statuses: string[];
-  selections: string[];
-  secrets: string[];
-  clearCount: number;
-  closed: number;
-} {
-  const state = {
-    opened: [] as string[],
-    questions: [] as string[],
-    confirmations: [] as string[],
-    lines: [] as string[],
-    errors: [] as string[],
-    finished: [] as number[],
-    statuses: [] as string[],
-    selections: [] as string[],
-    secrets: [] as string[],
-    clearCount: 0,
-    closed: 0
-  };
-  return {
-    isTTY,
-    opened: state.opened,
-    questions: state.questions,
-    confirmations: state.confirmations,
-    selections: state.selections,
-    secrets: state.secrets,
-    lines: state.lines,
-    errors: state.errors,
-    finished: state.finished,
-    statuses: state.statuses,
-    get clearCount() { return state.clearCount; },
-    get closed() { return state.closed; },
-    open: (workspaceRoot: string): void => { state.opened.push(workspaceRoot); },
-    question: async (prompt: string) => {
-      state.questions.push(prompt);
-      return answers.shift() ?? "/exit";
-    },
-    confirm: async (question: string) => {
-      state.confirmations.push(question);
-      return true;
-    },
-    select: async (title: string, options: readonly TuiConnectionOption[]) => {
-      state.selections.push(`${title}: ${options.map((option) => option.label).join(", ")}`);
-      const answer = answers.shift();
-      if (answer === undefined) return undefined;
-      const index = Number(answer);
-      return Number.isInteger(index) && index >= 0 && index < options.length ? index : undefined;
-    },
-    secret: async (prompt: string) => {
-      state.secrets.push(prompt);
-      return answers.shift();
-    },
-    write: (line: string): void => { state.lines.push(line); },
-    error: (line: string): void => { state.errors.push(line); },
-    clear: (): void => { state.clearCount += 1; },
-    setStatus: (status): void => { state.statuses.push(status); },
-    finish: (exitCode: number): void => { state.finished.push(exitCode); },
-    close: (): void => { state.closed += 1; }
-  };
-}
-
-const info = {
+const info: TuiRuntimeInfo = {
+  permissionMode: "acceptEdits",
   provider: "scripted",
   model: "scripted-local",
-  permissionMode: "ask",
   isolatedEnvironment: false
 };
 
-function snapshot(overrides: Partial<TuiSessionSnapshot> = {}): TuiSessionSnapshot {
+function snapshot(): TuiSessionSnapshot {
   return {
     id: "abc-123",
     status: "completed",
     provider: "scripted",
     model: "scripted-local",
-    prompt: "Implement OAuth",
-    updatedAt: "2026-08-13T00:00:00.000Z",
-    ...overrides
+    prompt: "Run the checks",
+    updatedAt: "2026-08-13T00:00:00.000Z"
   };
 }
 
+function fakeTerminal(inputs: string[], isTTY = true): TuiTerminal & {
+  output: string[];
+  errors: string[];
+  clearCount: number;
+  finished: number[];
+  closed: number;
+  statuses: string[];
+} {
+  const value = {
+    isTTY,
+    output: [] as string[],
+    errors: [] as string[],
+    clearCount: 0,
+    finished: [] as number[],
+    closed: 0,
+    statuses: [] as string[],
+    open: async (_workspaceRoot: string) => undefined,
+    question: async () => inputs.shift() ?? "/exit",
+    confirm: async () => false,
+    select: async (_title: string, options: readonly { id: string; label: string }[]) => options.length > 0 ? 0 : undefined,
+    secret: async () => undefined,
+    write: (line: string) => value.output.push(line),
+    error: (line: string) => value.errors.push(line),
+    clear: () => { value.clearCount += 1; },
+    setStatus: (status: string) => value.statuses.push(status),
+    finish: (exitCode: number) => value.finished.push(exitCode),
+    close: () => { value.closed += 1; }
+  };
+  return value;
+}
+
+function fakeTtyStreams(): {
+  input: PassThrough & { isTTY: boolean; setRawMode(enabled: boolean): void };
+  output: PassThrough & { isTTY: boolean };
+  errorOutput: PassThrough;
+  rawModes: boolean[];
+  outputText: () => string;
+  errorText: () => string;
+} {
+  const rawModes: boolean[] = [];
+  const input = new PassThrough() as PassThrough & { isTTY: boolean; setRawMode(enabled: boolean): void };
+  const output = new PassThrough() as PassThrough & { isTTY: boolean };
+  const errorOutput = new PassThrough();
+  let text = "";
+  let errorText = "";
+  input.isTTY = true;
+  input.setRawMode = (enabled) => { rawModes.push(enabled); };
+  output.isTTY = true;
+  output.on("data", (chunk: Buffer) => { text += chunk.toString(); });
+  errorOutput.on("data", (chunk: Buffer) => { errorText += chunk.toString(); });
+  return { input, output, errorOutput, rawModes, outputText: () => text, errorText: () => errorText };
+}
+
 describe("interactive TUI", () => {
-  it("preserves pasted lines after a masked secret", () => {
-    expect(secretInputRemainder("secret-key\r\n1\n/exit\n")).toEqual(["1", "/exit"]);
-    expect(secretInputRemainder("secret-key")).toBeUndefined();
+  it("renders an OpenCode-inspired welcome and footer with ShardCode data only", () => {
+    const style = (text: string, tone: string) => "<" + tone + ">" + text + "</" + tone + ">";
+
+    const welcome = renderTuiWelcome("/repo", info, "Run the tests", style).join("\n");
+    const footer = renderTuiFooter("/repo", info, snapshot(), "waiting", style).join("\n");
+
+    expect(welcome).toContain("ShardCode");
+    expect(welcome).toContain("Run the tests");
+    expect(welcome).toContain("/exit");
+    expect(welcome).toContain("/quit");
+    expect(footer).toContain("acceptEdits");
+    expect(footer).toContain("scripted / scripted-local");
+    expect(footer).toContain("/repo");
+    expect(footer).toContain("abc-123");
+    expect(footer).not.toMatch(/LSP|MCP|sidebar|workspace sessions/i);
   });
 
-  it("keeps running local commands and tasks in one session", async () => {
-    const terminal = fakeTerminal(["/model", "/permissions", "/status", "/clear", "/help status", "/unknown", "Implement OAuth", "/status", "/exit"]);
+  it("keeps the session alive for local commands and a task", async () => {
+    const terminal = fakeTerminal(["/model", "Implement OAuth", "/status", "/clear", "/exit"]);
     const requests: InteractiveTaskRequest[] = [];
+
     const result = await runInteractiveTui({
       terminal,
       workspaceRoot: "/repo",
       info,
-      execute: async (request): Promise<TuiExecutionResult> => {
+      execute: async (request) => {
         requests.push(request);
         return { exitCode: 0, session: snapshot() };
       }
@@ -119,103 +120,248 @@ describe("interactive TUI", () => {
     expect(result).toBe(0);
     expect(requests).toEqual([{ kind: "run", prompt: "Implement OAuth" }]);
     expect(terminal.clearCount).toBe(1);
-    expect(terminal.statuses).toContain("running");
-    expect(terminal.lines.join("\n")).toContain("scripted-local");
-    expect(terminal.lines.join("\n")).toContain("Last session: abc-123");
-    expect(terminal.errors.join("\n")).toContain("Unknown slash command");
     expect(terminal.finished).toEqual([0]);
     expect(terminal.closed).toBe(1);
   });
 
-  it("dispatches resume locally and does not send slash commands to execution", async () => {
-    const terminal = fakeTerminal(["/resume abc-123", "/exit"]);
-    const requests: InteractiveTaskRequest[] = [];
-    const result = await runInteractiveTui({
+  it("renders topic-specific help and a complete generic command list", async () => {
+    const terminal = fakeTerminal(["/help model", "/help", "/help quit", "/exit"]);
+
+    await expect(runInteractiveTui({
       terminal,
       workspaceRoot: "/repo",
       info,
-      execute: async (request): Promise<TuiExecutionResult> => {
-        requests.push(request);
-        return { exitCode: 0, session: snapshot({ prompt: "Resumed task" }) };
-      }
-    });
-
-    expect(result).toBe(0);
-    expect(requests).toEqual([{ kind: "resume", sessionId: "abc-123" }]);
-  });
-
-  it("opens /connect, keeps the key out of rendering, and updates /model", async () => {
-    const terminal = fakeTerminal(["/connect", "0", "secret-key", "0", "/model", "/exit"]);
-    let connected: TuiConnectionResult | undefined;
-    const result = await runInteractiveTui({
-      terminal,
-      workspaceRoot: "/repo",
-      info,
-      connect: async (io) => {
-        const providerIndex = await io.select("Provider", [{ id: "openai", label: "OpenAI" }]);
-        const apiKey = await io.secret("API key: ");
-        const modelIndex = await io.select("Model", [{ id: "gpt-5.4", label: "GPT-5.4" }]);
-        if (providerIndex === undefined || modelIndex === undefined || !apiKey) return undefined;
-        connected = { providerId: "openai", providerLabel: "OpenAI", modelId: "gpt-5.4", modelLabel: "GPT-5.4" };
-        return connected;
-      },
       execute: async () => ({ exitCode: 0 })
-    });
+    })).resolves.toBe(0);
 
-    expect(result).toBe(0);
-    expect(connected).toMatchObject({ providerId: "openai", modelId: "gpt-5.4" });
-    expect(terminal.secrets).toEqual(["API key: "]);
-    expect(terminal.lines.join("\n")).toContain("Provider: OpenAI\nModel: GPT-5.4");
-    expect(terminal.lines.join("\n")).not.toContain("secret-key");
+    expect(terminal.output.join("\n")).toContain("/model [model]");
+    expect(terminal.output.join("\n")).toContain("/exit");
+    expect(terminal.output.some((line) => line.includes("/exit") && line.includes("/quit"))).toBe(true);
   });
 
-  it("re-prompts empty tasks and forwards execution output and permissions", async () => {
-    const terminal = fakeTerminal(["   ", "Implement OAuth", "/exit"]);
-    const exitCode = await runInteractiveTui({
+  it("bounds styled history by visible characters and keeps a complete reset", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+    const prefix = "\u001b[38;2;224;108;117m";
+    const reset = "\u001b[39m";
+    terminal.style = (text) => `${prefix}${text}${reset}`;
+    const longStyledLine = terminal.style("x".repeat(5_000), "error");
+
+    await expect(runInteractiveTui({
       terminal,
       workspaceRoot: "/repo",
       info,
-      execute: async (request, io) => {
-        expect(request).toEqual({ kind: "run", prompt: "Implement OAuth" });
-        io.write("[tool] completed");
-        expect(await io.ask("run tests?")).toBe(true);
-        return { exitCode: 7 };
+      execute: async (_request, callbacks) => {
+        callbacks?.onStyledOutput?.(longStyledLine);
+        return { exitCode: 0 };
+      }
+    })).resolves.toBe(0);
+
+    const outputLine = terminal.output.find((line) => line.startsWith(prefix) && line.length >= 4_000);
+    expect(outputLine).toBeDefined();
+    expect(outputLine).toMatch(/\u001b\[39m$/);
+    expect(outputLine?.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")).toHaveLength(4_000);
+  });
+
+  it("closes an unterminated trusted foreground style before writing it", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+    const styledOutput = "\u001b[31mleak";
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onStyledOutput?.(styledOutput);
+        return { exitCode: 0 };
+      }
+    })).resolves.toBe(0);
+
+    expect(terminal.output.filter((line) => line.includes("leak"))).toEqual(["\u001b[31mleak\u001b[39m"]);
+  });
+
+  it("closes and reopens trusted foreground styles around physical newlines", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onStyledOutput?.("\u001b[31mfirst\nsecond");
+        return { exitCode: 0 };
+      }
+    })).resolves.toBe(0);
+
+    const styledLines = terminal.output.filter((line) => line.includes("first") || line.includes("second"));
+    expect(styledLines).toEqual(["\u001b[31mfirst\u001b[39m", "\u001b[31msecond\u001b[39m"]);
+    expect(styledLines.every((line) => line.endsWith("\u001b[39m"))).toBe(true);
+    expect(styledLines.every((line) => line.match(/\u001b\[39m/g)?.length === 1)).toBe(true);
+  });
+
+  it("consumes incomplete trusted CSI prefixes without exposing their suffix", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onStyledOutput?.("before\u001b[31");
+        return { exitCode: 0 };
+      }
+    })).resolves.toBe(0);
+
+    expect(terminal.output.filter((line) => line.includes("before"))).toEqual(["before"]);
+  });
+
+  it("sanitizes hostile live execution output before writing it", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onOutput?.("live\u001b[2Jclear\u009b2Jc1\tfield\nnext");
+        return { exitCode: 0 };
+      }
+    })).resolves.toBe(0);
+
+    const output = terminal.output.join("");
+    expect(output).not.toContain("\u001b[2J");
+    expect(output).not.toContain("\u009b2J");
+    expect(output).not.toContain("\t");
+    expect(terminal.output.some((line) => line.includes("liveclearc1 field next"))).toBe(true);
+  });
+
+  it("sanitizes hostile legacy execution output before writing it", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async () => ({ exitCode: 0, output: ["legacy\u001b[2Jclear\u009b2Jc1\tfield\nnext"] })
+    })).resolves.toBe(0);
+
+    const output = terminal.output.join("");
+    expect(output).not.toContain("\u001b[2J");
+    expect(output).not.toContain("\u009b2J");
+    expect(output).not.toContain("\t");
+    expect(terminal.output.some((line) => line.includes("legacyclearc1 field next"))).toBe(true);
+  });
+
+  it("shows live output and the running footer before execution completes", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+    let release: (() => void) | undefined;
+    let started: (() => void) | undefined;
+    const execution = runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onOutput?.("live event");
+        started?.();
+        await new Promise<void>((resolve) => { release = resolve; });
+        return { exitCode: 0, session: snapshot() };
       }
     });
 
-    expect(exitCode).toBe(7);
-    expect(terminal.opened).toEqual(["/repo"]);
-    expect(terminal.questions).toHaveLength(3);
-    expect(terminal.errors).toContain("A task description is required.");
-    expect(terminal.lines).toContain("[tool] completed");
-    expect(terminal.confirmations).toEqual(["run tests?"]);
-    expect(terminal.finished).toEqual([7]);
-    expect(terminal.closed).toBe(1);
+    await new Promise<void>((resolve) => { started = resolve; });
+
+    expect(terminal.output).toContain("live event");
+    expect(terminal.output.some((line) => line.includes("Status:") && line.includes("running"))).toBe(true);
+
+    release?.();
+    await expect(execution).resolves.toBe(0);
   });
 
-  it("continues after a task callback error", async () => {
-    const terminal = fakeTerminal(["Implement OAuth", "/status", "/exit"]);
-    let calls = 0;
-    const result = await runInteractiveTui({
+  it("reports failed instead of error when execution throws", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
       terminal,
       workspaceRoot: "/repo",
       info,
       execute: async () => {
-        calls += 1;
-        throw new Error("runtime unavailable");
+        throw new Error("execution failed");
       }
-    });
+    })).resolves.toBe(1);
 
-    expect(result).toBe(1);
-    expect(calls).toBe(1);
-    expect(terminal.errors).toContain("runtime unavailable");
-    expect(terminal.lines.join("\n")).toContain("No task has run in this TUI session.");
+    expect(terminal.statuses).toEqual(["waiting", "running", "failed"]);
+    expect(terminal.statuses).not.toContain("error");
   });
 
-  it("fails closed when no interactive terminal is available", async () => {
+  it("sanitizes interactive executor errors to a single line", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+    const hostile = "execution\u001b[2J\u001b]8;;https://evil\u0007\u009b31m\r\n\terror details";
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async () => {
+        throw new Error(hostile);
+      }
+    })).resolves.toBe(1);
+
+    expect(terminal.errors).toHaveLength(1);
+    expect(terminal.errors[0]).toContain("execution");
+    expect(terminal.errors[0]).toContain("error details");
+    expect(terminal.errors[0]).not.toMatch(/[\u001b\u0080-\u009f\r\n\t]/);
+    expect(terminal.statuses).toContain("failed");
+  });
+
+  it("accepts legacy buffered output without duplicating live output", async () => {
+    const terminal = fakeTerminal(["Run the checks", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        callbacks?.onOutput?.("shared output");
+        return { exitCode: 0, session: snapshot(), output: ["shared output"] };
+      }
+    })).resolves.toBe(0);
+
+    expect(terminal.output.filter((line) => line === "shared output")).toHaveLength(1);
+  });
+
+  it("retains the effective resumed provider, model, permissions, and aborted status", async () => {
+    const terminal = fakeTerminal(["/resume saved-session", "/model", "/permissions", "/status", "/exit"]);
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async () => ({
+        exitCode: 130,
+        provider: "anthropic",
+        model: "saved-model",
+        permissionMode: "ask",
+        session: {
+          ...snapshot(),
+          id: "saved-session",
+          status: "aborted",
+          provider: "anthropic",
+          model: "saved-model"
+        }
+      })
+    })).resolves.toBe(130);
+
+    const output = terminal.output.join("\n");
+    expect(output).toContain("Model: anthropic / saved-model");
+    expect(output).toContain("Permissions: ask");
+    expect(output).toContain("Status: aborted");
+    expect(output).not.toContain("Status: failed");
+  });
+
+  it("fails closed without a TTY and never calls the executor", async () => {
     const terminal = fakeTerminal([], false);
     let executed = false;
-    const exitCode = await runInteractiveTui({
+
+    await expect(runInteractiveTui({
       terminal,
       workspaceRoot: "/repo",
       info,
@@ -223,11 +369,167 @@ describe("interactive TUI", () => {
         executed = true;
         return { exitCode: 0 };
       }
-    });
+    })).resolves.toBe(1);
 
-    expect(exitCode).toBe(1);
     expect(executed).toBe(false);
     expect(terminal.errors.join("\n")).toContain("TTY");
-    expect(terminal.closed).toBe(1);
+  });
+
+  it("preserves lines pasted after a masked secret", () => {
+    expect(secretInputRemainder("secret-key\r\n1\n/exit\n")).toEqual(["1", "/exit"]);
+    expect(secretInputRemainder("secret-key")).toBeUndefined();
+  });
+
+  it("masks raw secret input and queues pasted lines without echoing the secret", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+
+    const secret = terminal.secret("Token: ");
+    streams.input.write("secret-key\r\n1\n/exit\n");
+
+    await expect(secret).resolves.toBe("secret-key");
+    expect(streams.rawModes).toEqual([true, false]);
+    expect(streams.outputText()).toContain("**********");
+    expect(streams.outputText()).not.toContain("secret-key");
+    await expect(terminal.question("> ")).resolves.toBe("1");
+    await expect(terminal.question("> ")).resolves.toBe("/exit");
+    terminal.close();
+  });
+
+  it("preserves pasted lines arriving after the secret terminator in a later chunk", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+
+    const secret = terminal.secret("Token: ");
+    streams.input.write("secret-key\r\n");
+
+    await expect(secret).resolves.toBe("secret-key");
+    streams.input.write("1\n/exit\n");
+
+    await expect(terminal.question("> ")).resolves.toBe("1");
+    await expect(terminal.question("> ")).resolves.toBe("/exit");
+    terminal.close();
+  });
+
+  it("does not turn a CRLF split across chunks into an empty pasted line", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+
+    const secret = terminal.secret("Token: ");
+    streams.input.write("secret-key\r");
+
+    await expect(secret).resolves.toBe("secret-key");
+    streams.input.write("\n1\n/exit\n");
+
+    await expect(terminal.question("> ")).resolves.toBe("1");
+    await expect(terminal.question("> ")).resolves.toBe("/exit");
+    terminal.close();
+  });
+
+  it("stops buffering before a subsequent secret prompt", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+
+    const firstSecret = terminal.secret("Token: ");
+    streams.input.write("first-secret\r\n");
+    await expect(firstSecret).resolves.toBe("first-secret");
+
+    const secondSecret = terminal.secret("Token: ");
+    streams.input.write("second-secret\r\n");
+    await expect(secondSecret).resolves.toBe("second-secret");
+    expect(streams.outputText()).not.toContain("first-secret");
+    expect(streams.outputText()).not.toContain("second-secret");
+
+    const nextQuestion = terminal.question("> ");
+    streams.input.write("next\n");
+    await expect(nextQuestion).resolves.toBe("next");
+    terminal.close();
+  });
+
+  it("sanitizes and warns on confirmation labels without styling the decision suffix", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: { COLORTERM: "truecolor" } });
+
+    const confirmed = terminal.confirm("\u001b[31mrun_shell: pnpm test\u001b[0m");
+    streams.input.write("y\n");
+
+    await expect(confirmed).resolves.toBe(true);
+    expect(streams.outputText()).toContain("\u001b[38;2;245;167;66mrun_shell: pnpm test\u001b[39m [y/N] ");
+    expect(streams.outputText()).not.toContain("\u001b[31m");
+    terminal.close();
+  });
+
+  it("keeps LF and tab out of the default confirmation display", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+    const confirmed = terminal.confirm("run_shell: node\n\t-e hostile\n\treason");
+    streams.input.write("y\n");
+
+    await expect(confirmed).resolves.toBe(true);
+    expect(streams.outputText()).not.toContain("\n");
+    expect(streams.outputText()).not.toContain("\t");
+    terminal.close();
+  });
+
+  it("uses plain styling when output is not a TTY", () => {
+    const streams = fakeTtyStreams();
+    streams.output.isTTY = false;
+    const terminal = createDefaultTuiTerminal({ ...streams, env: { COLORTERM: "truecolor" } });
+
+    expect(terminal.isTTY).toBe(false);
+    expect(terminal.style?.("ShardCode", "primary")).toBe("ShardCode");
+    terminal.close();
+  });
+
+  it("preserves trusted TUI styling through history while stripping hostile event ANSI", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: { COLORTERM: "truecolor" } });
+    const inputs = ["Run the checks", "/exit"];
+    terminal.question = async () => inputs.shift() ?? "/exit";
+    const eventLines: string[] = [];
+
+    terminal.write("\u001b[39mraw-reset");
+    terminal.error("\u001b[39mraw-error-reset");
+    expect(streams.outputText()).toBe("raw-reset\n");
+    expect(streams.errorText()).toBe("raw-error-reset\n");
+
+    renderEvent(
+      createEvent("session-1", "ToolFailed", {
+        result: { output: "\u001b[31mrm -rf\u001b[0m\nfailed" }
+      }),
+      (line) => eventLines.push(line),
+      false,
+      terminal.style ? { style: terminal.style } : undefined
+    );
+
+    await expect(runInteractiveTui({
+      terminal,
+      workspaceRoot: "/repo",
+      info,
+      execute: async (_request, callbacks) => {
+        for (const eventLine of eventLines) callbacks?.onStyledOutput?.(eventLine);
+        return { exitCode: 0 };
+      }
+    })).resolves.toBe(0);
+
+    const output = streams.outputText();
+    expect(output).toContain("\u001b[38;2;250;178;131mShardCode\u001b[39m");
+    expect(output).toContain("\u001b[38;2;224;108;117mÉchec : rm -rf\u001b[39m\n\u001b[38;2;224;108;117mfailed\u001b[39m");
+    expect(output).not.toContain("\u001b[31m");
+    terminal.close();
+  });
+
+  it("restores raw mode when secret input is cancelled or the terminal closes", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+
+    const cancelled = terminal.secret("Token: ");
+    streams.input.write("\u0003");
+    await expect(cancelled).resolves.toBeUndefined();
+
+    const closing = terminal.secret("Token: ");
+    terminal.close();
+    await expect(closing).resolves.toBeUndefined();
+    expect(streams.rawModes).toEqual([true, false, true, false]);
   });
 });

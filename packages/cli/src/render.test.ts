@@ -23,7 +23,10 @@ describe("terminal rendering", () => {
     expect(sanitizeTerminalText("\u001b[31mred\u001b[0m\u0007\nnext\r\tline")).toBe("red\nnext\tline");
   });
 
-  it("removes C1 terminal controls as well as seven-bit escapes", () => {
+  it("removes C1 OSC sequences and every standalone C1 control", () => {
+    const standaloneC1 = String.fromCharCode(...Array.from({ length: 32 }, (_, index) => 0x80 + index));
+
+    expect(sanitizeTerminalText(`before\u009d8;window title\u009c${standaloneC1}after`)).toBe("beforeafter");
     expect(sanitizeTerminalText("safe\u009b31mred\u009c\u009dtitle\u009cvisible")).toBe("saferedvisible");
   });
 
@@ -31,6 +34,7 @@ describe("terminal rendering", () => {
     ["SessionStarted", {}, "Session démarrée"],
     ["AgentStarted", {}, "Agent démarré"],
     ["ContextUpdated", {}, "Contexte du projet mis à jour"],
+    ["ContextCompacted", { omittedMessages: 3 }, "Contexte compacté (3 message(s) omis)"],
     ["ModelRequestStarted", {}, "Réflexion en cours…"],
     ["ModelResponseReceived", { toolCallCount: 2 }, "Réponse reçue (2 outils à exécuter)"],
     ["SubAgentSpawned", {}, "Sous-agent démarré"],
@@ -40,6 +44,7 @@ describe("terminal rendering", () => {
     ["TestPassed", {}, "Tests réussis"],
     ["ValidationStarted", {}, "Validation…"],
     ["ValidationPassed", {}, "Validation réussie"],
+    ["AgentAborted", { message: "cancelled" }, "Exécution interrompue : cancelled"],
     ["BudgetExceeded", { message: "token budget exceeded (4/3)" }, "Limite atteinte : la limite de tokens a été atteinte (4/3)"],
     ["ThrashingDetected", { message: "equivalent tool failure repeated 3 times" }, "Arrêt : la même opération a échoué plusieurs fois"],
     ["SessionCompleted", { status: "completed" }, "Session terminée (réussie)"]
@@ -67,25 +72,44 @@ describe("terminal rendering", () => {
     })).toEqual(["Exécution : read_file"]);
   });
 
-  it("renders tool completion and failure without technical prefixes", () => {
+  it("renders completion, failure, and explicit permission markers", () => {
     expect(render("ToolCompleted", { executionId: "execution-1" })).toEqual(["Terminé"]);
     expect(render("ToolFailed", { result: { output: "commande introuvable" } })).toEqual(["Échec : commande introuvable"]);
+    expect(render("ToolDenied", {
+      result: { toolName: "run_shell", status: "denied", output: "review first", permission: { reason: "review first" } }
+    })).toEqual(["[permission] denied run_shell: review first"]);
   });
 
-  it("sanitizes human-readable event details", () => {
-    expect(render("ToolFailed", { result: { output: "\u001b[31mcommande échouée\u001b[0m" } })).toEqual(["Échec : commande échouée"]);
+  it("sanitizes hostile event text before applying a semantic tone", () => {
+    const lines: string[] = [];
+    renderEvent(
+      event("ToolFailed", { result: { output: "\u001b[31mrm -rf\u001b[0m\nfailed" } }),
+      (line) => lines.push(line),
+      false,
+      { style: (text, tone) => `<${tone}>${text}</${tone}>` }
+    );
+
+    expect(lines[0]).toBe("<error>Échec : rm -rf\nfailed</error>");
+    expect(lines[0]).not.toContain("\u001b");
   });
 
   it("does not expose unknown event type names in the human fallback", () => {
     expect(render("UnknownEvent" as EventType)).toEqual(["Étape en cours"]);
   });
 
-  it("keeps JSON output byte-for-byte unchanged", () => {
+  it("keeps JSON output byte-for-byte unchanged and unstyled", () => {
     const input = event("ModelRequestStarted", { content: "\u001b[31mraw\u001b[0m" });
     const lines: string[] = [];
+    let styleCalls = 0;
 
-    renderEvent(input, (line) => lines.push(line), true);
+    renderEvent(input, (line) => lines.push(line), true, {
+      style: () => {
+        styleCalls += 1;
+        return "should-not-run";
+      }
+    });
 
     expect(lines).toEqual([JSON.stringify(input)]);
+    expect(styleCalls).toBe(0);
   });
 });

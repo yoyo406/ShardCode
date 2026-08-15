@@ -19,8 +19,8 @@ import {
 import { AgentRuntime, JsonSessionStore } from "@shardcode/runtime";
 import { FileStorage, ToolRuntime } from "@shardcode/tool-runtime";
 import { parseArgs, HELP_TEXT, type CliOptions, type CliProvider } from "./args.js";
-import { askForPermission } from "./prompts.js";
-import { renderEvent } from "./render.js";
+import { askForPermission, sanitizePermissionPrompt } from "./prompts.js";
+import { renderEvent, sanitizeTerminalText } from "./render.js";
 import { ProviderStore } from "./provider-store.js";
 import {
   createDefaultTuiTerminal,
@@ -90,6 +90,15 @@ function environmentKey(provider: CliProvider, env: Record<string, string | unde
   return names.map((name) => env[name]).find((value): value is string => Boolean(value));
 }
 
+export function writeFinalMessage(io: Pick<CliIO, "write">, message: string | undefined, json: boolean): void {
+  if (!json && message) io.write(sanitizeTerminalText(message));
+}
+
+function sanitizeCliError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return sanitizeTerminalText(message).replace(/[\r\n\t]/g, " ");
+}
+
 function buildProvider(
   options: CliOptions,
   env: Record<string, string | undefined>,
@@ -137,8 +146,12 @@ type TaskCliOptions = CliOptions & { command: "run" | "resume" };
 
 interface TaskExecutionResult {
   exitCode: number;
+  provider?: string;
+  model?: string;
   session?: Session;
 }
+
+type EventRenderOptions = Parameters<typeof renderEvent>[3];
 
 function asTaskOptions(options: CliOptions): TaskCliOptions {
   if (options.command !== "run" && options.command !== "resume") {
@@ -147,12 +160,12 @@ function asTaskOptions(options: CliOptions): TaskCliOptions {
   return options as TaskCliOptions;
 }
 
-function sessionSnapshot(session: Session): TuiSessionSnapshot {
+function sessionSnapshot(session: Session, provider = session.provider, model = session.model): TuiSessionSnapshot {
   return {
     id: session.id,
     status: session.status,
-    provider: session.provider,
-    model: session.model,
+    provider,
+    model,
     prompt: session.rootTask.prompt,
     updatedAt: session.updatedAt
   };
@@ -161,7 +174,8 @@ function sessionSnapshot(session: Session): TuiSessionSnapshot {
 async function executeTask(
   options: TaskCliOptions,
   io: CliIO,
-  providerStore: ProviderStore
+  providerStore: ProviderStore,
+  renderOptions?: EventRenderOptions
 ): Promise<TaskExecutionResult> {
   try {
     const workspaceRoot = workspaceRootFor(io);
@@ -170,7 +184,7 @@ async function executeTask(
       mode: options.permissionMode,
       isolatedEnvironment: options.isolatedEnvironment,
       ask: async (request, decision) => io.ask ? io.ask(
-        `${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`,
+        sanitizePermissionPrompt(`${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`),
         request,
         decision
       ) : false
@@ -197,6 +211,10 @@ async function executeTask(
         : config.connections.find((connection) => connection.providerId === config.activeProviderId);
     }
     const provider = buildProvider(providerOptions, io.env, io.fetch, storedConnection);
+    const activeProvider = storedConnection?.providerId ?? providerOptions.provider;
+    const activeModel = providerOptions.modelExplicit
+      ? providerOptions.model
+      : storedConnection?.modelId ?? defaultModel(activeProvider);
     const runtime = new AgentRuntime({
       provider,
       tools: toolRuntime,
@@ -210,7 +228,7 @@ async function executeTask(
         maxWallClockSeconds: options.maxWallClockSeconds
       },
       maxContextCharacters: options.maxContextCharacters,
-      onEvent: async (event: ShardCodeEvent) => renderEvent(event, io.write, options.json)
+      onEvent: async (event: ShardCodeEvent) => renderEvent(event, io.write, options.json, renderOptions)
     });
     const onSigint = () => runtime.abort();
     process.once("SIGINT", onSigint);
@@ -225,13 +243,15 @@ async function executeTask(
     if (storedConnection?.verification === "unverified" && session.status !== "failed" && session.status !== "aborted") {
       await providerStore.markVerified(storedConnection.providerId).catch(() => undefined);
     }
-    if (!options.json && session.status === "completed" && session.finalMessage) io.write(session.finalMessage);
+    if (session.status === "completed") writeFinalMessage(io, session.finalMessage, options.json);
     return {
       exitCode: session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1,
+      provider: activeProvider,
+      model: activeModel,
       session
     };
   } catch (error) {
-    io.error(error instanceof Error ? error.message : String(error));
+    io.error(sanitizeCliError(error));
     return { exitCode: 1 };
   }
 }
@@ -291,7 +311,7 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
   try {
     options = parseArgs(argv);
   } catch (error) {
-    io.error(error instanceof Error ? error.message : String(error));
+    io.error(sanitizeCliError(error));
     return 2;
   }
   if (options.command === "help") {
@@ -309,7 +329,7 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
     try {
       activeConnection = options.providerExplicit ? undefined : await providerStore.loadActive();
     } catch (error) {
-      io.error(error instanceof Error ? error.message : String(error));
+      io.error(sanitizeCliError(error));
       return 1;
     }
     return runInteractiveTui({
@@ -328,12 +348,13 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
           : { ...options, command: "resume", sessionId: request.sessionId };
         const result = await executeTask(
           taskOptions,
-          { ...io, write: tuiIO.write, error: tuiIO.error, ask: tuiIO.ask },
-          providerStore
+          { ...io, write: tuiIO.writeStyled, error: tuiIO.error, ask: tuiIO.ask },
+          providerStore,
+          terminal.style ? { style: terminal.style } : undefined
         );
         return {
           exitCode: result.exitCode,
-          ...(result.session ? { session: sessionSnapshot(result.session) } : {})
+          ...(result.session ? { session: sessionSnapshot(result.session, result.provider, result.model) } : {})
         };
       }
     });

@@ -46,6 +46,22 @@ const SUPPORTED_PROVIDERS: readonly CliProvider[] = [
   "scripted"
 ];
 
+function defaults(): Omit<CliOptions, "command" | "prompt" | "sessionId"> {
+  return {
+    provider: DEFAULTS.provider,
+    providerExplicit: false,
+    model: DEFAULTS.model,
+    modelExplicit: false,
+    permissionMode: DEFAULTS.permissionMode,
+    maxTokens: DEFAULTS.maxTokens,
+    maxToolCalls: DEFAULTS.maxToolCalls,
+    maxWallClockSeconds: DEFAULTS.maxWallClockSeconds,
+    maxContextCharacters: DEFAULTS.maxContextCharacters,
+    json: false,
+    isolatedEnvironment: false
+  };
+}
+
 function numberOption(name: string, value: string | undefined): number {
   if (value === undefined || value.length === 0) throw new Error(`${name} requires a value`);
   const parsed = Number(value);
@@ -62,47 +78,51 @@ function nextValue(argv: string[], index: number, option: string): [string, numb
 export function parseArgs(argv: string[]): CliOptions {
   const first = argv[0];
   if (first === "--help" || first === "-h" || first === "help") {
-    return {
-      command: "help",
-      provider: DEFAULTS.provider,
-      providerExplicit: false,
-      model: DEFAULTS.model,
-      modelExplicit: false,
-      permissionMode: DEFAULTS.permissionMode,
-      maxTokens: DEFAULTS.maxTokens,
-      maxToolCalls: DEFAULTS.maxToolCalls,
-      maxWallClockSeconds: DEFAULTS.maxWallClockSeconds,
-      maxContextCharacters: DEFAULTS.maxContextCharacters,
-      json: false,
-      isolatedEnvironment: false
-    };
+    return { command: "help", ...defaults() };
   }
 
   const explicitCommand = first === "run" || first === "resume";
-  const interactiveCommand = !first || first.startsWith("--");
-  const directPrompt = first && !explicitCommand && !interactiveCommand ? first : undefined;
-
+  const directPrompt = first && !explicitCommand && !first.startsWith("--") ? first : undefined;
   const positional: string[] = directPrompt ? [directPrompt] : [];
-  let provider: CliProvider = DEFAULTS.provider;
-  let providerExplicit = false;
-  let model = DEFAULTS.model;
-  let modelExplicit = false;
-  let permissionMode: CliPermissionMode = DEFAULTS.permissionMode;
-  let maxTokens = DEFAULTS.maxTokens;
-  let maxToolCalls = DEFAULTS.maxToolCalls;
-  let maxWallClockSeconds = DEFAULTS.maxWallClockSeconds;
-  let maxContextCharacters = DEFAULTS.maxContextCharacters;
-  let json = false;
-  let isolatedEnvironment = false;
+  let {
+    provider,
+    providerExplicit,
+    model,
+    modelExplicit,
+    permissionMode,
+    maxTokens,
+    maxToolCalls,
+    maxWallClockSeconds,
+    maxContextCharacters,
+    json,
+    isolatedEnvironment
+  } = defaults();
 
-  const optionStart = explicitCommand ? 1 : directPrompt ? 1 : 0;
+  const optionStart = explicitCommand || directPrompt ? 1 : 0;
   for (let index = optionStart; index < argv.length; index += 1) {
     const argument = argv[index];
     if (!argument) continue;
+    if (argument === "-h") {
+      return {
+        command: "help",
+        provider,
+        providerExplicit,
+        model,
+        modelExplicit,
+        permissionMode,
+        maxTokens,
+        maxToolCalls,
+        maxWallClockSeconds,
+        maxContextCharacters,
+        json,
+        isolatedEnvironment
+      };
+    }
     if (!argument.startsWith("--")) {
       positional.push(argument);
       continue;
     }
+
     switch (argument) {
       case "--provider": {
         const [value, next] = nextValue(argv, index, argument);
@@ -157,7 +177,6 @@ export function parseArgs(argv: string[]): CliOptions {
         isolatedEnvironment = true;
         break;
       case "--help":
-      case "-h":
         return {
           command: "help",
           provider,
@@ -177,12 +196,17 @@ export function parseArgs(argv: string[]): CliOptions {
     }
   }
 
-  const command: "interactive" | "run" | "resume" = explicitCommand ? first : directPrompt ? "run" : "interactive";
+  const command: "interactive" | "run" | "resume" = explicitCommand
+    ? first
+    : positional.length > 0
+      ? "run"
+      : "interactive";
   if (command === "run" && positional.length === 0) throw new Error("run requires a task prompt");
   if (command === "resume" && positional.length !== 1) throw new Error("resume requires exactly one session id");
+
   return {
     command,
-    ...(command === "run" ? { prompt: positional.join(" ") } : { sessionId: positional[0]! }),
+    ...(command === "run" ? { prompt: positional.join(" ") } : command === "resume" ? { sessionId: positional[0]! } : {}),
     provider,
     providerExplicit,
     model,
@@ -200,14 +224,15 @@ export function parseArgs(argv: string[]): CliOptions {
 export const HELP_TEXT = `ShardCode - autonomous coding CLI
 
 Usage:
-  shard                              # open the interactive TUI
-  shard "task description"            # run a task directly
-  shardcode                           # same interactive TUI
+  shard [options]                         interactive TUI (no command)
+  shardcode [options]                     interactive TUI (no command)
+  shard "task description" [options]      run a task directly
+  shardcode "task description" [options]  run a task directly
   shardcode run "task description" [options]
   shardcode resume <session-id> [options]
 
 Options:
-  --provider openai|openai-codex|google-gemini|mistral|anthropic-claude|opencode-zen|opencode-go|cline|kilo-code|scripted
+  --provider openai|openai-codex|google-gemini|mistral|anthropic-claude|opencode-zen|opencode-go|cline|kilo-code|anthropic|gemini|scripted
   --model <model>
   --permission-mode ask|acceptEdits|bypass
   --max-tokens <number>

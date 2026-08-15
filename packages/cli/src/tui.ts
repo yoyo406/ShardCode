@@ -1,38 +1,31 @@
 import type { PermissionDecision, PermissionRequest } from "@shardcode/shared";
 import { createInterface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
 import { formatSlashHelp, parseInteractiveInput, type SlashCommand } from "./slash.js";
+import { sanitizePermissionPrompt } from "./prompts.js";
 import { sanitizeTerminalText } from "./render.js";
+import { detectTuiCapabilities, styleTuiText, type TuiTone } from "./theme.js";
 
-const MAX_RENDERED_LINES = 200;
-const MAX_LINE_LENGTH = 4_000;
+const MAX_HISTORY_LINES = 200;
+const MAX_HISTORY_LINE_LENGTH = 4_000;
+const SUGGESTIONS = [
+  "Inspect the repository and suggest the next change",
+  "Run the tests and explain any failures",
+  "Review the current changes for risks"
+] as const;
 
+const ANSI_COMPONENT = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+const TRUSTED_SGR = new RegExp(
+  `\\u001b\\[(?:38;2;${ANSI_COMPONENT};${ANSI_COMPONENT};${ANSI_COMPONENT}|38;5;${ANSI_COMPONENT}|3[0-7]|9[0-7]|39)m`,
+  "y"
+);
+const FOREGROUND_RESET = "\u001b[39m";
+const ANSI_OSC = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/y;
+const C1_OSC = /\u009d[^\u0007\u009c]*(?:\u0007|\u009c|\u001b\\)/y;
+const ANSI_CSI = /\u001b\[[0-?]*[ -/]*[@-~]/y;
+const C1_CSI = /\u009b[0-?]*[ -/]*[@-~]/y;
+
+export type TuiStyle = (text: string, tone: TuiTone) => string;
 export type TuiStatus = "waiting" | "running" | "completed" | "failed" | "aborted";
-
-export type InteractiveTaskRequest =
-  | { kind: "run"; prompt: string }
-  | { kind: "resume"; sessionId: string };
-
-export interface TuiSessionSnapshot {
-  id: string;
-  status: string;
-  provider: string;
-  model: string;
-  prompt: string;
-  updatedAt: string;
-}
-
-export interface TuiExecutionResult {
-  exitCode: number;
-  session?: TuiSessionSnapshot;
-}
-
-export interface InteractiveRuntimeInfo {
-  provider: string;
-  model: string;
-  permissionMode: string;
-  isolatedEnvironment: boolean;
-}
 
 export interface TuiConnectionOption {
   id: string;
@@ -47,10 +40,10 @@ export interface TuiConnectionResult {
 }
 
 export interface TuiTerminal {
-  readonly isTTY: boolean;
-  open(workspaceRoot: string): void;
+  isTTY: boolean;
+  open(workspaceRoot: string): Promise<void> | void;
   question(prompt: string): Promise<string>;
-  confirm(question: string): Promise<boolean>;
+  confirm(prompt: string): Promise<boolean>;
   select(title: string, options: readonly TuiConnectionOption[]): Promise<number | undefined>;
   secret(prompt: string): Promise<string | undefined>;
   write(line: string): void;
@@ -59,13 +52,72 @@ export interface TuiTerminal {
   setStatus(status: TuiStatus): void;
   finish(exitCode: number): void;
   close(): void;
+  style?: TuiStyle;
+  writeStyled?(line: string): void;
+  writeStyledError?(line: string): void;
 }
 
-export interface TuiExecutionIO {
+interface DefaultTuiTerminal extends TuiTerminal {
+  secret(prompt: string): Promise<string | undefined>;
+}
+
+type TuiInputStream = NodeJS.ReadableStream & {
+  isTTY?: boolean;
+  setRawMode?(enabled: boolean): void;
+  resume(): void;
+};
+
+type TuiOutputStream = NodeJS.WritableStream & { isTTY?: boolean };
+
+export interface DefaultTuiTerminalOptions {
+  input?: TuiInputStream;
+  output?: TuiOutputStream;
+  errorOutput?: NodeJS.WritableStream;
+  env?: Record<string, string | undefined>;
+}
+
+export interface TuiRuntimeInfo {
+  permissionMode: string;
+  provider: string;
+  model: string;
+  isolatedEnvironment: boolean;
+}
+
+export type InteractiveRuntimeInfo = TuiRuntimeInfo;
+
+export interface TuiSessionSnapshot {
+  id: string;
+  status: string;
+  provider: string;
+  model: string;
+  prompt: string;
+  updatedAt: string;
+}
+
+export type InteractiveTaskRequest =
+  | { kind: "run"; prompt: string }
+  | { kind: "resume"; sessionId: string };
+
+export interface InteractiveTaskResult {
+  exitCode: number;
+  provider?: string;
+  model?: string;
+  permissionMode?: string;
+  session?: TuiSessionSnapshot;
+  output?: readonly string[];
+}
+
+export interface InteractiveTaskCallbacks {
   write(line: string): void;
+  writeStyled(line: string): void;
   error(line: string): void;
   ask(question: string, request?: PermissionRequest, decision?: PermissionDecision): Promise<boolean>;
+  onOutput(line: string): void;
+  onStyledOutput(line: string): void;
 }
+
+export type TuiExecutionIO = InteractiveTaskCallbacks;
+export type TuiExecutionResult = InteractiveTaskResult;
 
 export interface TuiConnectionIO {
   select(title: string, options: readonly TuiConnectionOption[]): Promise<number | undefined>;
@@ -77,9 +129,253 @@ export interface TuiConnectionIO {
 export interface InteractiveTuiOptions {
   terminal: TuiTerminal;
   workspaceRoot: string;
-  info: InteractiveRuntimeInfo;
-  execute(request: InteractiveTaskRequest, io: TuiExecutionIO): Promise<TuiExecutionResult>;
+  info: TuiRuntimeInfo;
+  execute(request: InteractiveTaskRequest, callbacks: InteractiveTaskCallbacks): Promise<InteractiveTaskResult>;
   connect?(io: TuiConnectionIO): Promise<TuiConnectionResult | undefined>;
+}
+
+function paint(text: string, tone: TuiTone, style?: TuiStyle): string {
+  const safeText = sanitizeTerminalText(text);
+  return style ? style(safeText, tone) : safeText;
+}
+
+function line(label: string, value: string, tone: TuiTone, style?: TuiStyle): string {
+  return `${paint(label, "normal", style)} ${paint(value, tone, style)}`;
+}
+
+export function renderTuiWelcome(
+  workspaceRoot: string,
+  info: TuiRuntimeInfo,
+  suggestion: string,
+  style?: TuiStyle
+): string[] {
+  return [
+    paint("ShardCode", "primary", style),
+    paint("A focused coding session for your repository.", "normal", style),
+    line("Workspace:", workspaceRoot, "info", style),
+    line("Provider:", `${info.provider} / ${info.model}`, "accent", style),
+    line("Try:", suggestion, "accent", style),
+    paint("Type a task, or /help for commands. Use /exit (or /quit) to leave.", "normal", style)
+  ];
+}
+
+export function renderTuiFooter(
+  workspaceRoot: string,
+  info: TuiRuntimeInfo,
+  session: TuiSessionSnapshot | undefined,
+  status: string,
+  style?: TuiStyle
+): string[] {
+  const statusTone: TuiTone = status === "running"
+    ? "info"
+    : status === "completed"
+      ? "success"
+      : status === "aborted"
+        ? "warning"
+        : status === "failed" || status === "error"
+          ? "error"
+          : "normal";
+  return [
+    line("Status:", status, statusTone, style),
+    line("Permissions:", info.permissionMode, "warning", style),
+    line("Model:", `${info.provider} / ${info.model}`, "accent", style),
+    line("Workspace:", workspaceRoot, "info", style),
+    line("Isolation:", info.isolatedEnvironment ? "enabled" : "disabled", "warning", style),
+    line("Last session:", session?.id ?? "none", "normal", style)
+  ];
+}
+
+type HistoryOutputKind = "untrusted" | "trustedStyled";
+
+function matchAt(pattern: RegExp, value: string, index: number): string | undefined {
+  pattern.lastIndex = index;
+  return pattern.exec(value)?.[0];
+}
+
+function sanitizeUntrustedOutput(value: string): string {
+  return sanitizeTerminalText(value).replace(/[\n\t]/g, " ");
+}
+
+function sanitizeTuiError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return sanitizeTerminalText(message).replace(/[\r\n\t]/g, " ");
+}
+
+function incompleteCsiLength(value: string, index: number, prefixLength: number): number | undefined {
+  let cursor = index + prefixLength;
+  while (cursor < value.length) {
+    const code = value.charCodeAt(cursor);
+    if ((code >= 0x30 && code <= 0x3f) || (code >= 0x20 && code <= 0x2f)) {
+      cursor += 1;
+      continue;
+    }
+    if (code >= 0x40 && code <= 0x7e) return undefined;
+    break;
+  }
+  return cursor - index;
+}
+
+function incompleteEscapeLength(value: string, index: number): number | undefined {
+  if (value[index] === "\u001b") {
+    if (value[index + 1] === "]") return value.length - index;
+    if (value[index + 1] === "[") return incompleteCsiLength(value, index, 2);
+    return 1;
+  }
+  if (value[index] === "\u009d") return value.length - index;
+  if (value[index] === "\u009b") return incompleteCsiLength(value, index, 1);
+  return undefined;
+}
+
+function sanitizeTrustedStyledOutput(value: string): string {
+  let result = "";
+  let index = 0;
+  let foregroundStyle: string | undefined;
+  let pendingReopen: string | undefined;
+  while (index < value.length) {
+    const trustedSgr = matchAt(TRUSTED_SGR, value, index);
+    if (trustedSgr) {
+      result += trustedSgr;
+      index += trustedSgr.length;
+      foregroundStyle = trustedSgr === FOREGROUND_RESET ? undefined : trustedSgr;
+      pendingReopen = undefined;
+      continue;
+    }
+    const escape = matchAt(ANSI_OSC, value, index)
+      ?? matchAt(C1_OSC, value, index)
+      ?? matchAt(ANSI_CSI, value, index)
+      ?? matchAt(C1_CSI, value, index);
+    if (escape) {
+      index += escape.length;
+      continue;
+    }
+    const incompleteEscape = incompleteEscapeLength(value, index);
+    if (incompleteEscape !== undefined) {
+      index += incompleteEscape;
+      continue;
+    }
+    if (value[index] === "\n") {
+      if (foregroundStyle) {
+        result += FOREGROUND_RESET;
+        pendingReopen = foregroundStyle;
+        foregroundStyle = undefined;
+      }
+      result += "\n";
+      index += 1;
+      continue;
+    }
+    const code = value.charCodeAt(index);
+    if (
+      code === 0x7f
+      || (code >= 0x80 && code <= 0x9f)
+      || (code < 0x20 && value[index] !== "\n" && value[index] !== "\t")
+    ) {
+      index += 1;
+      continue;
+    }
+    if (pendingReopen) {
+      result += pendingReopen;
+      foregroundStyle = pendingReopen;
+      pendingReopen = undefined;
+    }
+    const codePoint = value.codePointAt(index)!;
+    const character = String.fromCodePoint(codePoint);
+    result += character;
+    index += character.length;
+  }
+  return foregroundStyle ? `${result}${FOREGROUND_RESET}` : result;
+}
+
+function truncateHistoryLine(value: string): string {
+  let result = "";
+  let index = 0;
+  let visibleCharacters = 0;
+  let foregroundStyleOpen = false;
+
+  while (index < value.length) {
+    const ansi = matchAt(TRUSTED_SGR, value, index);
+    if (ansi) {
+      result += ansi;
+      index += ansi.length;
+      foregroundStyleOpen = ansi !== FOREGROUND_RESET;
+      continue;
+    }
+    if (value[index] === "\u001b" || visibleCharacters >= MAX_HISTORY_LINE_LENGTH) break;
+    const codePoint = value.codePointAt(index)!;
+    const character = String.fromCodePoint(codePoint);
+    result += character;
+    index += character.length;
+    visibleCharacters += 1;
+  }
+
+  if (index < value.length && foregroundStyleOpen) result += FOREGROUND_RESET;
+  return result;
+}
+
+function appendHistory(history: string[], value: string): void {
+  for (const valueLine of value.split("\n")) {
+    history.push(truncateHistoryLine(valueLine));
+  }
+  if (history.length > MAX_HISTORY_LINES) history.splice(0, history.length - MAX_HISTORY_LINES);
+}
+
+function writeTuiLine(terminal: TuiTerminal, line: string): void {
+  if (terminal.writeStyled) {
+    terminal.writeStyled(sanitizeTrustedStyledOutput(line));
+  } else {
+    terminal.write(line);
+  }
+}
+
+function writeTuiErrorLine(terminal: TuiTerminal, line: string): void {
+  if (terminal.writeStyledError) {
+    terminal.writeStyledError(sanitizeTrustedStyledOutput(line));
+  } else {
+    terminal.error(line);
+  }
+}
+
+function writeHistoryLine(terminal: TuiTerminal, history: string[], value: string, kind: HistoryOutputKind): void {
+  const safeValue = kind === "trustedStyled" ? sanitizeTrustedStyledOutput(value) : sanitizeUntrustedOutput(value);
+  appendHistory(history, safeValue);
+  const lastLines = history.slice(-safeValue.split("\n").length);
+  for (const historyLine of lastLines) {
+    if (kind === "trustedStyled") writeTuiLine(terminal, historyLine);
+    else terminal.write(historyLine);
+  }
+}
+
+function writeSessionHeader(terminal: TuiTerminal, session: TuiSessionSnapshot | undefined): void {
+  if (session?.id) writeTuiLine(terminal, paint(`Session ${session.id}`, "primary", terminal.style));
+}
+
+function writeHelp(terminal: TuiTerminal, target?: string): void {
+  writeTuiLine(terminal, paint(formatSlashHelp(target), "normal", terminal.style));
+}
+
+function writeCommandStatus(
+  terminal: TuiTerminal,
+  workspaceRoot: string,
+  info: TuiRuntimeInfo,
+  session: TuiSessionSnapshot | undefined,
+  status: TuiStatus
+): void {
+  for (const footerLine of renderTuiFooter(workspaceRoot, info, session, status, terminal.style)) writeTuiLine(terminal, footerLine);
+}
+
+function writeSessionStatus(terminal: TuiTerminal, session: TuiSessionSnapshot | undefined): void {
+  if (!session) {
+    writeTuiLine(terminal, paint("No task has run in this TUI session.", "normal", terminal.style));
+    return;
+  }
+  const details = [
+    line("Last session:", session.id, "primary", terminal.style),
+    line("Status:", session.status, session.status === "completed" ? "success" : session.status === "aborted" ? "warning" : "error", terminal.style),
+    line("Task:", session.prompt, "normal", terminal.style),
+    line("Provider:", session.provider, "accent", terminal.style),
+    line("Model:", session.model, "accent", terminal.style),
+    line("Updated:", session.updatedAt, "info", terminal.style)
+  ];
+  for (const detail of details) writeTuiLine(terminal, detail);
 }
 
 function statusFromExitCode(exitCode: number): TuiStatus {
@@ -88,20 +384,11 @@ function statusFromExitCode(exitCode: number): TuiStatus {
   return "failed";
 }
 
-function safe(value: string): string {
-  return sanitizeTerminalText(value);
-}
-
-function renderStatus(snapshot: TuiSessionSnapshot | undefined): string {
-  if (!snapshot) return "No task has run in this TUI session.";
-  return [
-    `Last session: ${safe(snapshot.id)}`,
-    `Status: ${safe(snapshot.status)}`,
-    `Task: ${safe(snapshot.prompt)}`,
-    `Provider: ${safe(snapshot.provider)}`,
-    `Model: ${safe(snapshot.model)}`,
-    `Updated: ${safe(snapshot.updatedAt)}`
-  ].join("\n");
+function executionStatus(result: InteractiveTaskResult): TuiStatus {
+  const status = result.session?.status;
+  return status === "waiting" || status === "running" || status === "completed" || status === "failed" || status === "aborted"
+    ? status
+    : statusFromExitCode(result.exitCode);
 }
 
 function isInterrupt(error: unknown): boolean {
@@ -110,350 +397,362 @@ function isInterrupt(error: unknown): boolean {
   return error.name === "AbortError" || code === "ABORT_ERR";
 }
 
-export function secretInputRemainder(text: string): string[] | undefined {
-  const newlineIndex = text.search(/[\r\n]/);
-  if (newlineIndex < 0) return undefined;
-  const newline = text[newlineIndex];
-  const remainderStart = newline === "\r" && text[newlineIndex + 1] === "\n" ? newlineIndex + 2 : newlineIndex + 1;
-  return text.slice(remainderStart).split(/\r?\n/).filter(Boolean);
-}
-
-async function executeRequest(
-  options: InteractiveTuiOptions,
+async function runRequest(
+  terminal: TuiTerminal,
   request: InteractiveTaskRequest,
-  io: TuiExecutionIO
-): Promise<TuiExecutionResult> {
+  execute: InteractiveTuiOptions["execute"],
+  history: string[],
+  onStatus: (status: TuiStatus) => void
+): Promise<InteractiveTaskResult> {
+  terminal.setStatus("running");
+  onStatus("running");
   try {
-    return await options.execute(request, io);
+    let receivedLiveOutput = false;
+    const writeOutput = (output: string): void => {
+      receivedLiveOutput = true;
+      writeHistoryLine(terminal, history, output, "untrusted");
+    };
+    const writeStyledOutput = (output: string): void => {
+      receivedLiveOutput = true;
+      writeHistoryLine(terminal, history, output, "trustedStyled");
+    };
+    const callbacks: InteractiveTaskCallbacks = {
+      write: writeOutput,
+      writeStyled: writeStyledOutput,
+      onOutput: writeOutput,
+      onStyledOutput: writeStyledOutput,
+      error: (error) => writeTuiErrorLine(terminal, paint(sanitizeTuiError(error), "error", terminal.style)),
+      ask: (question) => terminal.confirm(sanitizePermissionPrompt(question))
+    };
+    const result = await execute(request, callbacks);
+    if (!receivedLiveOutput) {
+      for (const output of result.output ?? []) writeHistoryLine(terminal, history, output, "untrusted");
+    }
+    terminal.setStatus(executionStatus(result));
+    return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    options.terminal.error(message);
+    writeTuiErrorLine(terminal, paint(sanitizeTuiError(error), "error", terminal.style));
+    terminal.setStatus("failed");
     return { exitCode: 1 };
   }
 }
 
-function renderLocalCommand(
+function applyExecutionSnapshot(info: TuiRuntimeInfo, result: InteractiveTaskResult): void {
+  if (result.session?.provider) info.provider = result.session.provider;
+  if (result.session?.model) info.model = result.session.model;
+  if (result.provider !== undefined) info.provider = result.provider;
+  if (result.model !== undefined) info.model = result.model;
+  if (result.permissionMode !== undefined) info.permissionMode = result.permissionMode;
+}
+
+async function handleCommand(
   command: SlashCommand,
   options: InteractiveTuiOptions,
-  lastSession: TuiSessionSnapshot | undefined,
-  info: InteractiveRuntimeInfo
-): { exit: boolean; lastSession: TuiSessionSnapshot | undefined } {
+  state: { info: TuiRuntimeInfo; session: TuiSessionSnapshot | undefined; status: TuiStatus; exitCode: number; suggestionIndex: number },
+  history: string[]
+): Promise<boolean> {
+  const { terminal, workspaceRoot } = options;
   switch (command.name) {
-    case "help":
-      options.terminal.write(formatSlashHelp(command.target));
-      return { exit: false, lastSession };
-    case "clear":
-      options.terminal.clear();
-      return { exit: false, lastSession };
-    case "status":
-      options.terminal.write(renderStatus(lastSession));
-      return { exit: false, lastSession };
-    case "model":
-      options.terminal.write(`Provider: ${safe(info.provider)}\nModel: ${safe(info.model)}`);
-      return { exit: false, lastSession };
-    case "permissions":
-      options.terminal.write(
-        `Permission mode: ${safe(info.permissionMode)}\nIsolated environment: ${info.isolatedEnvironment ? "yes" : "no"}`
-      );
-      return { exit: false, lastSession };
-    case "resume":
-    case "connect":
-      return { exit: false, lastSession };
     case "exit":
-      return { exit: true, lastSession };
+      return true;
+    case "help":
+      writeHelp(terminal, command.target);
+      return false;
+    case "clear":
+      history.length = 0;
+      terminal.clear();
+      for (const welcomeLine of renderTuiWelcome(workspaceRoot, state.info, SUGGESTIONS[state.suggestionIndex]!, terminal.style)) writeTuiLine(terminal, welcomeLine);
+      writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
+      return false;
+    case "status":
+      writeSessionStatus(terminal, state.session);
+      writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
+      return false;
+    case "model":
+      if (command.model) {
+        writeTuiLine(terminal, paint(`Model remains ${state.info.provider} / ${state.info.model} for this session.`, "warning", terminal.style));
+      } else {
+        writeTuiLine(terminal, line("Provider:", state.info.provider, "accent", terminal.style));
+        writeTuiLine(terminal, line("Model:", state.info.model, "accent", terminal.style));
+      }
+      return false;
+    case "permissions":
+      if (command.mode) {
+        writeTuiLine(terminal, paint(`Permissions remain ${state.info.permissionMode} for this session.`, "warning", terminal.style));
+      } else {
+        writeTuiLine(terminal, line("Permission mode:", state.info.permissionMode, "warning", terminal.style));
+        writeTuiLine(terminal, line("Isolated environment:", state.info.isolatedEnvironment ? "yes" : "no", "warning", terminal.style));
+      }
+      return false;
+    case "connect":
+      if (!options.connect) {
+        writeTuiErrorLine(terminal, paint("Provider connection is unavailable.", "error", terminal.style));
+        return false;
+      }
+      try {
+        const connection = await options.connect({
+          select: (title, choices) => terminal.select(title, choices),
+          secret: (prompt) => terminal.secret(prompt),
+          write: (output) => writeHistoryLine(terminal, history, output, "untrusted"),
+          error: (error) => writeTuiErrorLine(terminal, paint(sanitizeTuiError(error), "error", terminal.style))
+        });
+        if (connection) {
+          state.info.provider = connection.providerLabel;
+          state.info.model = connection.modelLabel;
+          writeTuiLine(terminal, paint(`Connected: ${connection.providerLabel} / ${connection.modelLabel}`, "success", terminal.style));
+          writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
+        } else {
+          writeTuiLine(terminal, paint("Provider connection cancelled.", "warning", terminal.style));
+        }
+      } catch (error) {
+        writeTuiErrorLine(terminal, paint(sanitizeTuiError(error), "error", terminal.style));
+      }
+      return false;
+    case "resume": {
+      const result = await runRequest(
+        terminal,
+        { kind: "resume", sessionId: command.sessionId },
+        options.execute,
+        history,
+        (status) => writeCommandStatus(terminal, workspaceRoot, state.info, state.session, status)
+      );
+      state.exitCode = result.exitCode;
+      applyExecutionSnapshot(state.info, result);
+      state.session = result.session ?? state.session;
+      state.status = executionStatus(result);
+      writeSessionHeader(terminal, state.session);
+      writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
+      return false;
+    }
   }
 }
 
 export async function runInteractiveTui(options: InteractiveTuiOptions): Promise<number> {
-  let exitCode = 0;
-  let opened = false;
-  let lastSession: TuiSessionSnapshot | undefined;
-  const activeInfo: InteractiveRuntimeInfo = { ...options.info };
-  const io: TuiExecutionIO = {
-    write: (line) => options.terminal.write(line),
-    error: (line) => options.terminal.error(line),
-    ask: (question) => options.terminal.confirm(safe(question))
+  const { terminal, workspaceRoot } = options;
+  if (!terminal.isTTY) {
+    terminal.error("Interactive mode requires a TTY.");
+    terminal.finish(1);
+    terminal.close();
+    return 1;
+  }
+
+  const history: string[] = [];
+  const state = {
+    info: { ...options.info },
+    session: undefined as TuiSessionSnapshot | undefined,
+    status: "waiting" as TuiStatus,
+    exitCode: 0,
+    suggestionIndex: 0
   };
 
   try {
-    if (!options.terminal.isTTY) {
-      options.terminal.error("Interactive mode requires a TTY.");
-      exitCode = 1;
-      return exitCode;
-    }
+    await terminal.open(workspaceRoot);
+    terminal.setStatus(state.status);
+    for (const welcomeLine of renderTuiWelcome(workspaceRoot, state.info, SUGGESTIONS[state.suggestionIndex]!, terminal.style)) writeTuiLine(terminal, welcomeLine);
+    writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
 
-    options.terminal.open(options.workspaceRoot);
-    opened = true;
-
-    while (true) {
-      options.terminal.setStatus("waiting");
-      const input = await options.terminal.question("Task or /command: ");
+    for (;;) {
+      const input = await terminal.question(paint("› ", "primary", terminal.style));
       const parsed = parseInteractiveInput(input);
-
       if (parsed.kind === "invalid") {
-        options.terminal.error(parsed.message);
+        writeTuiErrorLine(terminal, paint(parsed.message, "error", terminal.style));
         continue;
       }
-
       if (parsed.kind === "command") {
-        if (parsed.command.name === "exit") return exitCode;
-        if (parsed.command.name === "resume") {
-          options.terminal.setStatus("running");
-          const result = await executeRequest(options, { kind: "resume", sessionId: parsed.command.sessionId }, io);
-          exitCode = result.exitCode;
-          if (result.session) lastSession = result.session;
-          options.terminal.setStatus(statusFromExitCode(result.exitCode));
-          continue;
-        }
-        if (parsed.command.name === "connect") {
-          if (!options.connect) {
-            options.terminal.error("Provider connection is unavailable.");
-            continue;
-          }
-          try {
-            const connection = await options.connect({
-              select: (title, choices) => options.terminal.select(title, choices),
-              secret: (prompt) => options.terminal.secret(prompt),
-              write: (line) => options.terminal.write(line),
-              error: (line) => options.terminal.error(line)
-            });
-            if (connection) {
-              activeInfo.provider = connection.providerLabel;
-              activeInfo.model = connection.modelLabel;
-              options.terminal.write(`Connected: ${safe(connection.providerLabel)} / ${safe(connection.modelLabel)}`);
-            } else {
-              options.terminal.write("Provider connection cancelled.");
-            }
-          } catch (error) {
-            options.terminal.error(error instanceof Error ? error.message : String(error));
-          }
-          continue;
-        }
-        renderLocalCommand(parsed.command, options, lastSession, activeInfo);
+        if (await handleCommand(parsed.command, options, state, history)) break;
         continue;
       }
 
-      options.terminal.setStatus("running");
-      const result = await executeRequest(options, { kind: "run", prompt: parsed.prompt }, io);
-      exitCode = result.exitCode;
-      if (result.session) lastSession = result.session;
-      options.terminal.setStatus(statusFromExitCode(result.exitCode));
+      const result = await runRequest(
+        terminal,
+        { kind: "run", prompt: parsed.prompt },
+        options.execute,
+        history,
+        (status) => writeCommandStatus(terminal, workspaceRoot, state.info, state.session, status)
+      );
+      state.exitCode = result.exitCode;
+      applyExecutionSnapshot(state.info, result);
+      state.session = result.session ?? state.session;
+      state.status = executionStatus(result);
+      state.suggestionIndex = (state.suggestionIndex + 1) % SUGGESTIONS.length;
+      writeSessionHeader(terminal, state.session);
+      writeCommandStatus(terminal, workspaceRoot, state.info, state.session, state.status);
     }
   } catch (error) {
     if (isInterrupt(error)) {
-      exitCode = 130;
+      state.exitCode = 130;
+      state.status = "aborted";
+      terminal.setStatus("aborted");
     } else {
-      options.terminal.error(error instanceof Error ? error.message : String(error));
-      exitCode = 1;
+      writeTuiErrorLine(terminal, paint(sanitizeTuiError(error), "error", terminal.style));
+      state.exitCode = 1;
+      state.status = "failed";
+      terminal.setStatus("failed");
     }
-    return exitCode;
   } finally {
-    if (opened) options.terminal.finish(exitCode);
-    options.terminal.close();
+    terminal.finish(state.exitCode);
+    terminal.close();
   }
+  return state.exitCode;
 }
 
-export function createDefaultTuiTerminal(): TuiTerminal {
-  const isTTY = Boolean(stdin.isTTY && stdout.isTTY);
-  const lines: string[] = [];
-  const queuedInput: string[] = [];
-  const waitingQuestions: Array<{
-    resolve(value: string): void;
-    reject(error: Error): void;
-  }> = [];
-  let inputReader: ReturnType<typeof createInterface> | undefined;
-  let inputClosed = false;
-  let workspaceRoot = "";
-  let status: TuiStatus = "waiting";
-  let activeSecretCleanup: (() => void) | undefined;
+export function secretInputRemainder(value: string): string[] | undefined {
+  if (!/[\r\n]/.test(value)) return undefined;
+  const lines = value.split(/\r\n|\n|\r/).slice(1);
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
 
-  function inputClosedError(message = "Interactive input closed"): Error {
-    const error = new Error(message);
-    error.name = "AbortError";
-    return error;
-  }
-
-  function rejectWaitingQuestions(error: Error): void {
-    while (waitingQuestions.length > 0) waitingQuestions.shift()?.reject(error);
-  }
-
-  function receiveLine(line: string): void {
-    const waiting = waitingQuestions.shift();
-    if (waiting) {
-      waiting.resolve(line);
-    } else {
-      queuedInput.push(line);
+export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}): DefaultTuiTerminal {
+  const input = options.input ?? process.stdin;
+  const output = options.output ?? process.stdout;
+  const errorOutput = options.errorOutput ?? process.stderr;
+  const readline = createInterface({ input, output, terminal: false });
+  const capabilities = detectTuiCapabilities(Boolean(input.isTTY && output.isTTY), options.env ?? process.env);
+  const pendingLines: string[] = [];
+  const style: TuiStyle = (text, tone) => styleTuiText(text, tone, capabilities);
+  let cancelActiveSecret: (() => void) | undefined;
+  let pendingSecretLineBuffer = "";
+  let pendingSecretCarriageReturn = false;
+  let pendingSecretQuestionResolve: ((line: string) => void) | undefined;
+  let pendingSecretData: ((chunk: Buffer | string) => void) | undefined;
+  const stopPendingSecretData = (): void => {
+    if (pendingSecretData) input.removeListener("data", pendingSecretData);
+    pendingSecretData = undefined;
+    pendingSecretQuestionResolve = undefined;
+    pendingSecretLineBuffer = "";
+    pendingSecretCarriageReturn = false;
+  };
+  const stopPendingSecretDataIfIdle = (): void => {
+    if (
+      pendingSecretData
+      && pendingLines.length === 0
+      && pendingSecretLineBuffer === ""
+      && !pendingSecretCarriageReturn
+    ) stopPendingSecretData();
+  };
+  const startPendingSecretData = (carriageReturnAtChunkEnd: boolean): void => {
+    pendingSecretCarriageReturn = carriageReturnAtChunkEnd;
+    pendingSecretData = (chunk) => {
+      let text = String(chunk);
+      if (pendingSecretCarriageReturn) {
+        if (text.startsWith("\n")) text = text.slice(1);
+        pendingSecretCarriageReturn = false;
+      }
+      pendingSecretLineBuffer += text;
+      const lines = pendingSecretLineBuffer.split(/\r\n|\n|\r/);
+      pendingSecretLineBuffer = lines.pop() ?? "";
+      if (lines.length === 0) return;
+      if (pendingSecretQuestionResolve) {
+        const resolve = pendingSecretQuestionResolve;
+        pendingSecretQuestionResolve = undefined;
+        resolve(lines.shift()!);
+      }
+      pendingLines.push(...lines);
+      stopPendingSecretDataIfIdle();
+    };
+    input.on("data", pendingSecretData);
+  };
+  const normalQuestion = async (prompt: string): Promise<string> => {
+    const pending = pendingLines.shift();
+    if (pending !== undefined) {
+      stopPendingSecretDataIfIdle();
+      return pending;
     }
-  }
-
-  function openInputReader(): void {
-    inputClosed = false;
-    queuedInput.length = 0;
-    inputReader = createInterface({ input: stdin, output: stdout });
-    inputReader.on("line", receiveLine);
-    inputReader.on("SIGINT", () => {
-      inputClosed = true;
-      rejectWaitingQuestions(inputClosedError("Interactive input interrupted"));
-      inputReader?.close();
-    });
-    inputReader.on("close", () => {
-      inputClosed = true;
-      activeSecretCleanup?.();
-      rejectWaitingQuestions(inputClosedError());
-    });
-    stdin.on("end", () => {
-      inputClosed = true;
-      activeSecretCleanup?.();
-      rejectWaitingQuestions(inputClosedError());
-    });
-    stdin.on("close", () => {
-      inputClosed = true;
-      activeSecretCleanup?.();
-      rejectWaitingQuestions(inputClosedError());
-    });
-  }
-
-  function askInput(prompt: string): Promise<string> {
-    if (!inputReader) return Promise.reject(inputClosedError());
-    stdout.write(sanitizeTerminalText(prompt));
-    const queued = queuedInput.shift();
-    if (queued !== undefined) return Promise.resolve(queued);
-    if (inputClosed) return Promise.reject(inputClosedError());
-    return new Promise<string>((resolve, reject) => {
-      waitingQuestions.push({ resolve, reject });
-    });
-  }
-
-  function askSecret(prompt: string): Promise<string | undefined> {
-    const queued = queuedInput.shift();
-    if (queued !== undefined) return Promise.resolve(queued);
-    const reader = inputReader;
-    if (!reader || inputClosed) return Promise.resolve(undefined);
-    if (!stdin.isTTY || typeof stdin.setRawMode !== "function") return askInput(prompt);
-
-    return new Promise<string | undefined>((resolve, reject) => {
-      const characters: string[] = [];
-      const cleanup = (): void => {
-        stdin.off("data", onData);
-        stdin.setRawMode?.(false);
-        reader.resume();
-        activeSecretCleanup = undefined;
-      };
-      const finish = (value: string | undefined): void => {
-        cleanup();
-        stdout.write("\n");
-        resolve(value);
-      };
-      const onData = (chunk: Buffer | string): void => {
-        const text = String(chunk);
-        for (let index = 0; index < text.length; index += 1) {
-          const character = text[index];
-          if (character === undefined) continue;
-          if (character === "\u0003") {
-            cleanup();
-            reject(inputClosedError("Interactive input interrupted"));
-            return;
-          }
-          if (character === "\r" || character === "\n") {
-            const remainder = secretInputRemainder(text.slice(index)) ?? [];
-            finish(characters.join(""));
-            queuedInput.push(...remainder);
-            return;
-          } else if (character === "\u007f" || character === "\b") {
-            if (characters.length > 0) {
-              characters.pop();
-              stdout.write("\b \b");
-            }
-          } else if (character >= " ") {
-            characters.push(character);
-            stdout.write("*");
-          }
-        }
-      };
-      activeSecretCleanup = () => {
-        cleanup();
-        resolve(undefined);
-      };
-      stdout.write(sanitizeTerminalText(prompt));
-      reader.pause();
-      stdin.setRawMode(true);
-      stdin.on("data", onData);
-      stdin.resume();
-    });
-  }
-
-  function appendLine(prefix: string, value: string): void {
-    const sanitized = sanitizeTerminalText(value);
-    for (const line of sanitized.split("\n")) {
-      const bounded = line.length > MAX_LINE_LENGTH
-        ? `${line.slice(0, MAX_LINE_LENGTH - 1)}…`
-        : line;
-      lines.push(`${prefix}${bounded}`);
+    if (pendingSecretData) {
+      output.write(prompt);
+      return new Promise<string>((resolve) => { pendingSecretQuestionResolve = resolve; });
     }
-    if (lines.length > MAX_RENDERED_LINES) lines.splice(0, lines.length - MAX_RENDERED_LINES);
-    redraw();
-  }
-
-  function redraw(): void {
-    const content = [
-      "\u001b[2J\u001b[H",
-      "ShardCode — interactive",
-      `Workspace: ${sanitizeTerminalText(workspaceRoot)}`,
-      `Status: ${status}`,
-      "",
-      ...lines,
-      "",
-      "Ctrl+C to stop"
-    ].join("\n");
-    stdout.write(`${content}\n`);
-  }
-
+    output.write(prompt);
+    return readline.question("");
+  };
   return {
-    isTTY,
-    open: (root) => {
-      workspaceRoot = root;
-      lines.length = 0;
-      status = "waiting";
-      openInputReader();
-      redraw();
-    },
-    question: (prompt) => askInput(prompt),
-    confirm: async (question) => {
-      const answer = await askInput(`${sanitizeTerminalText(question)} [y/N] `);
-      return ["y", "yes", "o", "oui"].includes(answer.trim().toLowerCase());
-    },
-    select: async (title, options) => {
-      if (options.length === 0) return undefined;
-      const menu = [title, ...options.map((option, index) => `${index + 1}. ${sanitizeTerminalText(option.label)}`), ""].join("\n");
-      while (true) {
-        const answer = await askInput(`${menu}Choose a number: `);
+    isTTY: Boolean(input.isTTY && output.isTTY),
+    style,
+    open: async (_workspaceRoot: string) => undefined,
+    question: normalQuestion,
+    confirm: async (prompt) => /^(y|yes|o|oui)$/i.test(
+      (await normalQuestion(`${style(sanitizePermissionPrompt(prompt), "warning")} [y/N] `)).trim()
+    ),
+    select: async (title, choices) => {
+      if (choices.length === 0) return undefined;
+      const menu = [
+        sanitizeTerminalText(title),
+        ...choices.map((choice, index) => `${index + 1}. ${sanitizeTerminalText(choice.label)}`),
+        ""
+      ].join("\n");
+      for (;;) {
+        const answer = await normalQuestion(`${menu}Choose a number: `);
         if (!answer.trim()) continue;
         const index = Number(answer.trim()) - 1;
-        return Number.isInteger(index) && index >= 0 && index < options.length ? index : undefined;
+        return Number.isInteger(index) && index >= 0 && index < choices.length ? index : undefined;
       }
     },
-    secret: (prompt) => askSecret(prompt),
-    write: (line) => appendLine("", line),
-    error: (line) => appendLine("[error] ", line),
-    clear: () => {
-      lines.length = 0;
-      redraw();
+    secret: async (prompt) => {
+      if (!input.isTTY || typeof input.setRawMode !== "function") return normalQuestion(prompt);
+
+      output.write(sanitizeTerminalText(prompt));
+      return new Promise<string | undefined>((resolve) => {
+        let secret = "";
+        let complete = false;
+        const restore = (value: string | undefined, remainder?: string[]): void => {
+          if (complete) return;
+          complete = true;
+          input.removeListener("data", onData);
+          input.setRawMode!(false);
+          cancelActiveSecret = undefined;
+          if (remainder) pendingLines.push(...remainder);
+          if (remainder !== undefined) {
+            startPendingSecretData(textTerminatedWithCarriageReturn);
+          }
+          resolve(value);
+        };
+        let textTerminatedWithCarriageReturn = false;
+        const onData = (chunk: Buffer | string): void => {
+          const text = String(chunk);
+          for (let index = 0; index < text.length; index += 1) {
+            const character = text[index]!;
+            if (character === "\u0003") {
+              output.write("\n");
+              restore(undefined);
+              return;
+            }
+            if (character === "\u0008" || character === "\u007f") {
+              if (secret) {
+                secret = secret.slice(0, -1);
+                output.write("\b \b");
+              }
+              continue;
+            }
+            if (character === "\r" || character === "\n") {
+              output.write("\n");
+              textTerminatedWithCarriageReturn = character === "\r" && index + 1 === text.length;
+              restore(secret, secretInputRemainder(`${secret}${text.slice(index)}`));
+              return;
+            }
+            secret += character;
+            output.write("*");
+          }
+        };
+        stopPendingSecretData();
+        cancelActiveSecret?.();
+        cancelActiveSecret = () => restore(undefined);
+        input.setRawMode!(true);
+        input.resume();
+        input.on("data", onData);
+      });
     },
-    setStatus: (nextStatus) => {
-      status = nextStatus;
-      redraw();
-    },
-    finish: (exitCode) => {
-      status = statusFromExitCode(exitCode);
-      redraw();
-    },
+    write: (value) => output.write(`${sanitizeTerminalText(value)}\n`),
+    error: (value) => errorOutput.write(`${sanitizeTerminalText(value)}\n`),
+    writeStyled: (value) => output.write(`${value}\n`),
+    writeStyledError: (value) => errorOutput.write(`${value}\n`),
+    clear: () => output.write("\u001b[2J\u001b[H"),
+    setStatus: () => undefined,
+    finish: () => undefined,
     close: () => {
-      inputClosed = true;
-      activeSecretCleanup?.();
-      rejectWaitingQuestions(inputClosedError());
-      inputReader?.close();
-      inputReader = undefined;
-      queuedInput.length = 0;
+      cancelActiveSecret?.();
+      stopPendingSecretData();
+      readline.close();
     }
   };
 }

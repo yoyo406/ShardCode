@@ -9,15 +9,31 @@ describe("interactive slash commands", () => {
     });
   });
 
-  it("normalizes command names and aliases", () => {
+  it("normalizes command names, aliases, and help targets", () => {
     expect(parseInteractiveInput("/HELP model")).toEqual({
       kind: "command",
       command: { name: "help", target: "model" }
+    });
+    expect(parseInteractiveInput("/help quit")).toEqual({
+      kind: "command",
+      command: { name: "help", target: "exit" }
     });
     expect(parseInteractiveInput("/quit")).toEqual({
       kind: "command",
       command: { name: "exit" }
     });
+  });
+
+  it("parses read-only model and permission requests without applying them", () => {
+    expect(parseInteractiveInput("/model alternate")).toEqual({
+      kind: "command",
+      command: { name: "model", model: "alternate" }
+    });
+    expect(parseInteractiveInput("/permissions acceptEdits")).toEqual({
+      kind: "command",
+      command: { name: "permissions", mode: "acceptEdits" }
+    });
+    expect(parseInteractiveInput("/permissions unsafe")).toMatchObject({ kind: "invalid" });
   });
 
   it("parses a safe resume session id", () => {
