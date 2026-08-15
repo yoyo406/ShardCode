@@ -39,6 +39,13 @@ describe("CLI arguments", () => {
     });
   });
 
+  it("recognizes short help after options", () => {
+    expect(parseArgs(["--provider", "scripted", "-h"])).toMatchObject({
+      command: "help",
+      provider: "scripted"
+    });
+  });
+
   it("accepts a bare task while preserving explicit commands", () => {
     expect(parseArgs(["Fix the tests", "--provider", "scripted"])).toMatchObject({
       command: "run",

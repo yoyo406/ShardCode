@@ -106,13 +106,35 @@ describe("CLI lifecycle", () => {
     expect(output).toContain("Status: completed");
   });
 
+  it("uses explicit provider and model overrides in the resumed TUI snapshot", async () => {
+    const root = await mkdtemp(join(tmpdir(), "shardcode-cli-resume-"));
+    const sessionId = "22222222-2222-4222-8222-222222222222";
+    await mkdir(join(root, ".shardcode", "sessions"), { recursive: true });
+    await writeFile(join(root, ".shardcode", "sessions", `${sessionId}.json`), JSON.stringify({
+      id: sessionId,
+      provider: "anthropic",
+      model: "saved-model",
+      status: "completed"
+    }));
+    const testIo = io();
+    testIo.cwd = root;
+    const terminal = tuiTerminal([`/resume ${sessionId}`, "/status", "/exit"]);
+    testIo.tui = terminal;
+
+    await expect(runCli(["--provider", "scripted", "--model", "explicit-model"], testIo)).resolves.toBe(0);
+
+    const output = terminal.output.join("\n");
+    expect(output).toContain("Model: scripted / explicit-model");
+    expect(output).not.toContain("Model: anthropic / saved-model");
+  });
+
   it("sanitizes direct permission questions while preserving the raw authorization request", async () => {
     const root = await mkdtemp(join(tmpdir(), "shardcode-cli-permission-"));
     await mkdir(join(root, ".shardcode"), { recursive: true });
     await writeFile(join(root, ".shardcode", "settings.json"), JSON.stringify({
       rules: [{
         tool: "run_shell",
-        command: "*",
+        command: "node -e \"console.log('scripted check')\n\t// scripted check\"",
         decision: "ask",
         reason: "review\u001b[2J\r\n\tthis command"
       }]
@@ -130,9 +152,10 @@ describe("CLI lifecycle", () => {
     await expect(runCli(["run", "Run the checks", "--provider", "scripted", "--permission-mode", "acceptEdits"], testIo)).resolves.toBe(0);
 
     expect(question).toContain("run_shell:");
-    expect(question).toContain("reviewthis command");
+    expect(question).toContain("console.log('scripted check')⏎⇥// scripted check");
+    expect(question).toContain("review⏎⇥this command");
     expect(question).not.toMatch(/[\u001b\r\n\t]/);
-    expect(rawCommand).toBe("node -e \"console.log('scripted check')\"");
+    expect(rawCommand).toBe("node -e \"console.log('scripted check')\n\t// scripted check\"");
   });
 
   it("keeps interactive settings truthful when slash commands request changes", async () => {

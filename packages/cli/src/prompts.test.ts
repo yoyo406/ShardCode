@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatPermissionPrompt } from "./prompts.js";
+import { formatPermissionPrompt, sanitizePermissionPrompt } from "./prompts.js";
 
 describe("permission prompts", () => {
   it("styles permission prompts without changing their decision text", () => {
@@ -24,10 +24,15 @@ describe("permission prompts", () => {
       return `<warning>${text}</warning>`;
     });
 
-    expect(styledText).toBe("run_shell: pnpm test rm -rf  clear   linebreakfield [y/N]");
+    expect(styledText).toBe("run_shell: pnpm test rm -rf  clear   line⏎break⇥field [y/N]");
     expect(formatted).toBe(`<warning>${styledText}</warning>`);
     expect(formatted).not.toMatch(/[\u0000-\u001f\u007f\u0080-\u009f\u001b]/);
     expect(formatted).not.toContain("\n");
     expect(formatted).not.toContain("\t");
+  });
+
+  it("replaces semantic command line breaks and tabs with visible markers", () => {
+    expect(sanitizePermissionPrompt("first\r\nsecond\rthird\nfourth\tfifth"))
+      .toBe("first⏎second⏎third⏎fourth⇥fifth");
   });
 });

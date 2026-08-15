@@ -52,6 +52,10 @@ function defaultModel(provider: CliProvider): string {
   }
 }
 
+function effectiveModel(options: CliOptions): string {
+  return options.modelExplicit ? options.model : defaultModel(options.provider);
+}
+
 function environmentKey(provider: CliProvider): string | undefined {
   switch (provider) {
     case "openai": return "OPENAI_API_KEY";
@@ -71,16 +75,17 @@ function sanitizeCliError(error: unknown): string {
 }
 
 function buildProvider(options: CliOptions, env: Record<string, string | undefined>) {
-  const model = options.modelExplicit ? options.model : defaultModel(options.provider);
+  const model = effectiveModel(options);
   if (options.provider === "scripted") {
+    const command = "node -e \"console.log('scripted check')\n\t// scripted check\"";
     return createScriptedProvider(model, [
       {
         message: {
           role: "assistant",
           content: "I will run the repository checks.",
-          toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command: "node -e \"console.log('scripted check')\"" } }]
+          toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command } }]
         },
-        toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command: "node -e \"console.log('scripted check')\"" } }],
+        toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command } }],
         finishReason: "tool_call"
       },
       {
@@ -171,12 +176,15 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
         ? await runtime.run(request.prompt)
         : await runtime.resume(request.sessionId);
       const exitCode = session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1;
+      const hasExplicitProviderOrModel = options.providerExplicit || options.modelExplicit;
+      const provider = hasExplicitProviderOrModel ? providerOptions.provider : session.provider;
+      const model = hasExplicitProviderOrModel ? effectiveModel(providerOptions) : session.model;
       if (taskIO) {
         writeFinalMessage(taskIO, session.finalMessage, false);
         return {
           exitCode,
-          provider: session.provider,
-          model: session.model,
+          provider,
+          model,
           permissionMode: toolRuntime.mode,
           session: { sessionId: session.id, status: session.status },
         };
@@ -184,8 +192,8 @@ export async function runCli(argv: string[], suppliedIO?: CliIO): Promise<number
       writeFinalMessage(io, session.finalMessage, options.json);
       return {
         exitCode,
-        provider: session.provider,
-        model: session.model,
+        provider,
+        model,
         permissionMode: toolRuntime.mode,
         session: { sessionId: session.id, status: session.status }
       };

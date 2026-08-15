@@ -73,6 +73,21 @@ export function parseArgs(argv: string[]): CliOptions {
   for (let index = optionStart; index < argv.length; index += 1) {
     const argument = argv[index];
     if (!argument) continue;
+    if (argument === "-h") {
+      return {
+        command: "help",
+        provider,
+        providerExplicit,
+        model,
+        modelExplicit,
+        permissionMode,
+        maxTokens,
+        maxToolCalls,
+        maxWallClockSeconds,
+        json,
+        isolatedEnvironment
+      };
+    }
     if (!argument.startsWith("--")) {
       positional.push(argument);
       continue;

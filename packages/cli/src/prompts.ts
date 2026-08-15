@@ -16,6 +16,8 @@ export function sanitizePermissionPrompt(question: string): string {
     .replace(ANSI_SINGLE, "")
     .replace(/\u001b/g, "")
     .replace(/[\u0080-\u009f]/g, "")
+    .replace(/\r\n|\r|\n/g, "⏎")
+    .replace(/\t/g, "⇥")
     .replace(/[\u0000-\u001f\u007f]/g, "");
 }
 
