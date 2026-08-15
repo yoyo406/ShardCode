@@ -36,7 +36,7 @@ export class ToolRuntime implements ToolInvoker {
     const permissionEngine = options.permissionEngine ?? await PermissionEngine.create({
       workspaceRoot: options.workspaceRoot,
       mode: options.mode,
-      isolatedEnvironment: options.isolatedEnvironment ?? true
+      isolatedEnvironment: options.isolatedEnvironment ?? false
     });
     return new ToolRuntime({ ...options, permissionEngine });
   }
@@ -47,9 +47,15 @@ export class ToolRuntime implements ToolInvoker {
     this.permissions = options.permissionEngine ?? new PermissionEngine({
       workspaceRoot: options.workspaceRoot,
       mode: options.mode,
-      isolatedEnvironment: options.isolatedEnvironment ?? true
+      isolatedEnvironment: options.isolatedEnvironment ?? false
     });
-    this.sandbox = options.sandbox ?? createProcessSandbox({ isolated: true });
+    this.sandbox = options.sandbox ?? createProcessSandbox({
+      // Local process execution is acceptable only after an explicit approval.
+      // Bypass mode must have a real sandbox injected by the host and therefore
+      // fails closed when none is available.
+      isolated: false,
+      allowUnisolated: options.mode !== "bypass"
+    });
     this.ask = options.ask;
     this.fileStorage = new FileStorage(join(options.workspaceRoot, ".shardcode"));
   }

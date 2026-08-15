@@ -1,6 +1,10 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createEvent } from "@shardcode/shared";
-import { InMemorySessionStore } from "./session.js";
+import { FileStorage } from "@shardcode/tool-runtime";
+import { InMemorySessionStore, JsonSessionStore } from "./session.js";
 
 describe("session store", () => {
   it("persists sessions and event records", async () => {
@@ -25,5 +29,14 @@ describe("session store", () => {
 
     await expect(store.load(session.id)).resolves.toEqual(session);
     await expect(store.events(session.id)).resolves.toEqual([event]);
+  });
+
+  it("rejects persisted sessions that do not match the session schema", async () => {
+    const root = await mkdtemp(join(tmpdir(), "shardcode-session-schema-"));
+    const storage = new FileStorage(join(root, ".shardcode"));
+    await storage.write("sessions/forged.json", JSON.stringify({ id: "forged", status: "completed" }));
+    const store = new JsonSessionStore(storage);
+
+    await expect(store.load("forged")).rejects.toThrow("invalid persisted session");
   });
 });

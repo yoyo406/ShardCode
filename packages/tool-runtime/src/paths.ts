@@ -9,18 +9,13 @@ export interface WorkspacePath {
 }
 
 function isProtectedRelativePath(value: string): boolean {
-  const segments = value.split(/[\\/]+/).filter(Boolean);
-  const first = segments[0]?.toLowerCase();
-  const basename = segments.at(-1)?.toLowerCase() ?? "";
-  return (
-    first === ".git" ||
-    first === "secrets" ||
-    first === "secret" ||
-    first === "credentials" ||
-    basename === ".env" ||
-    basename.startsWith(".env.") ||
-    value === ".shardcode/settings.local.json"
+  const normalized = value.replaceAll("\\", "/").toLowerCase();
+  const segments = normalized.split(/[\\/]+/).filter(Boolean);
+  const basename = segments.at(-1) ?? "";
+  const protectedDirectory = segments.some((segment) =>
+    [".git", ".shardcode", "secrets", "secret", "credentials"].includes(segment)
   );
+  return protectedDirectory || basename === ".env" || basename.startsWith(".env.");
 }
 
 export function resolveWorkspacePath(workspaceRoot: string, requested: string): WorkspacePath {

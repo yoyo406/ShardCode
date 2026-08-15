@@ -41,6 +41,37 @@ export interface AgentRuntimeOptions {
 }
 
 const VALIDATION_MARKER = "SHARDCODE_VALIDATED:";
+const VALIDATION_COMMAND_PATTERN = /\b(?:test|tests|build|lint|check|checks|validate|validation|verify|typecheck|tsc|vitest|jest|mocha|pytest)\b/i;
+
+function isValidationCommand(command: string): boolean {
+  return VALIDATION_COMMAND_PATTERN.test(command);
+}
+
+function validateModelResponse(response: ModelResponse): ModelResponse {
+  const candidate = response as unknown as Record<string, unknown>;
+  const message = candidate.message as Record<string, unknown> | undefined;
+  const toolCalls = candidate.toolCalls;
+  if (
+    typeof message !== "object" ||
+    message === null ||
+    message.role !== "assistant" ||
+    typeof message.content !== "string"
+  ) {
+    throw new Error("provider response must contain an assistant message");
+  }
+  if (!Array.isArray(toolCalls)) throw new Error("provider response toolCalls must be an array");
+  for (const call of toolCalls) {
+    if (
+      typeof call !== "object" ||
+      call === null ||
+      typeof (call as Record<string, unknown>).id !== "string" ||
+      typeof (call as Record<string, unknown>).name !== "string"
+    ) {
+      throw new Error("provider response contains an invalid tool call");
+    }
+  }
+  return response;
+}
 
 const SYSTEM_PROMPT = `You are ShardCode, an autonomous coding agent operating in a repository.
 
@@ -121,7 +152,18 @@ export class AgentRuntime {
   async resume(id: string): Promise<Session> {
     const session = await this.options.sessionStore.load(id);
     if (!session) throw new Error(`session not found: ${id}`);
-    if (session.status === "completed") return session;
+    if (session.status === "completed") {
+      const validation = session.rootTask.validation;
+      if (
+        session.rootTask.status !== "completed" ||
+        validation?.markerSeen !== true ||
+        validation.passedCommands.length === 0 ||
+        !session.finalMessage?.includes(VALIDATION_MARKER)
+      ) {
+        throw new Error("completed session is missing validation proof");
+      }
+      return session;
+    }
     await this.emit(session, "AgentStarted", { resumed: true });
     return this.executeSession(session, true);
   }
@@ -137,7 +179,8 @@ export class AgentRuntime {
       if (
         execution.call.name === "run_shell" &&
         execution.result?.status === "completed" &&
-        typeof (execution.call.input as { command?: unknown }).command === "string"
+        typeof (execution.call.input as { command?: unknown }).command === "string" &&
+        isValidationCommand((execution.call.input as { command: string }).command)
       ) {
         successfulValidationCommands.add((execution.call.input as { command: string }).command);
       }
@@ -167,14 +210,17 @@ export class AgentRuntime {
         turns += 1;
         tracker.assertWallClock();
         session.budget = tracker.snapshot();
+        const remainingTokens = session.budget.maxTokens - session.budget.usedTokens;
+        if (remainingTokens <= 0) throw new BudgetExceededError("token budget exhausted before the next model turn");
         await this.emit(session, "ModelRequestStarted", { turn: turns, messageCount: session.messages.length });
         const request: ModelRequest = {
           model: this.options.provider.model,
           messages: session.messages,
-          tools: this.options.tools.definitions()
+          tools: this.options.tools.definitions(),
+          maxOutputTokens: remainingTokens
         };
-        const response = await this.completeWithProviderRetry(request);
-        tracker.recordTokens(response.usage?.totalTokens ?? 0);
+        const response = validateModelResponse(await this.completeWithProviderRetry(request));
+        tracker.recordTokens(response.usage?.totalTokens ?? remainingTokens);
         session.budget = tracker.snapshot();
         session.messages.push(response.message);
         await this.emit(session, "ModelResponseReceived", {
@@ -201,7 +247,12 @@ export class AgentRuntime {
             execution.result = result;
             execution.status = result.status === "completed" ? "completed" : "failed";
             session.messages.push(toolMessage(call, result));
-            if (call.name === "run_shell" && result.status === "completed" && typeof (call.input as { command?: unknown }).command === "string") {
+            if (
+              call.name === "run_shell" &&
+              result.status === "completed" &&
+              typeof (call.input as { command?: unknown }).command === "string" &&
+              isValidationCommand((call.input as { command: string }).command)
+            ) {
               successfulValidationCommands.add((call.input as { command: string }).command);
             }
             if (result.status === "completed") {

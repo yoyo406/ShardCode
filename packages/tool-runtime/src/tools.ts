@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ToolDefinition } from "@shardcode/shared";
 
@@ -71,6 +71,11 @@ export function globToRegExp(pattern: string): RegExp {
     const char = pattern[index];
     if (char === "*") {
       if (pattern[index + 1] === "*") {
+        if (pattern[index + 2] === "/") {
+          result += "(?:.*/)?";
+          index += 2;
+          continue;
+        }
         result += ".*";
         index += 1;
       } else result += "[^/]*";
@@ -108,5 +113,3 @@ export async function grepWorkspace(root: string, pattern: string, directory = "
 export async function ensureParent(path: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
 }
-
-export { readFile, rm, stat, writeFile };

@@ -12,4 +12,11 @@ describe("budget tracker", () => {
     expect(() => tracker.recordToolCall()).toThrow("tool-call budget");
     expect(() => tracker.recordTokens(11)).toThrow("token budget");
   });
+
+  it("rejects invalid token usage instead of silently ignoring it", () => {
+    const tracker = new BudgetTracker({ maxTokens: 20, maxToolCalls: 2, maxWallClockSeconds: 60 });
+
+    expect(() => tracker.recordTokens(-1)).toThrow("invalid token usage");
+    expect(() => tracker.recordTokens(Number.NaN)).toThrow("invalid token usage");
+  });
 });

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createProcessSandbox } from "@shardcode/sandbox";
 import { ToolRuntime } from "./runtime.js";
 import { FileStorage } from "./storage.js";
+import { globToRegExp } from "./tools.js";
 
 async function workspace(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "shardcode-tools-"));
@@ -49,11 +50,51 @@ describe("repository tools", () => {
     expect(executions).toBe(1);
   });
 
+  it("fails closed for bypass when no isolated sandbox is injected", async () => {
+    const root = await workspace();
+    const runtime = new ToolRuntime({
+      workspaceRoot: root,
+      mode: "bypass",
+      isolatedEnvironment: true
+    });
+
+    const result = await runtime.execute({
+      id: "bypass-without-sandbox",
+      name: "run_shell",
+      input: { command: "printf unsafe" }
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.error?.code).toBe("TOOL_EXECUTION_FAILED");
+    expect(result.output).toContain("process sandbox is unavailable");
+  });
+
   it("denies attempts to write protected files", async () => {
     const root = await workspace();
     const runtime = new ToolRuntime({ workspaceRoot: root, mode: "acceptEdits" });
 
     const result = await runtime.execute({ id: "secret-1", name: "write_file", input: { path: ".env", content: "SECRET=x" } });
+    expect(result.status).toBe("denied");
+    expect(result.error?.code).toBe("PERMISSION_DENIED");
+
+    const nested = await runtime.execute({
+      id: "nested-secret",
+      name: "write_file",
+      input: { path: "src/secrets/key.txt", content: "SECRET=x" }
+    });
+    expect(nested.status).toBe("denied");
+  });
+
+  it("denies workspace tools access to internal ShardCode state", async () => {
+    const root = await workspace();
+    const runtime = new ToolRuntime({ workspaceRoot: root, mode: "acceptEdits" });
+
+    const result = await runtime.execute({
+      id: "internal-state",
+      name: "write_file",
+      input: { path: ".shardcode/sessions/session.json", content: "{}" }
+    });
+
     expect(result.status).toBe("denied");
     expect(result.error?.code).toBe("PERMISSION_DENIED");
   });
@@ -112,5 +153,10 @@ describe("repository tools", () => {
     expect(listed.output).not.toContain("secrets/");
     expect(searched.output).toBe("");
     expect(matched.output).not.toContain("credentials/");
+  });
+
+  it("matches root-level files with a globstar pattern", () => {
+    expect(globToRegExp("**/*.md").test("README.md")).toBe(true);
+    expect(globToRegExp("**/*.md").test("docs/ARCHITECTURE.md")).toBe(true);
   });
 });

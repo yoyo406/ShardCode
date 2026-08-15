@@ -57,7 +57,9 @@ export function createOpenAIProvider(config: ProviderConfig): ModelProvider {
           headers: requestHeaders({ Authorization: `Bearer ${apiKey}` }),
           body: JSON.stringify(body)
         },
-        "OpenAI"
+        "OpenAI",
+        3,
+        config.timeoutMs
       );
       const choice = asRecord(asArray(payload.choices)[0]);
       const rawMessage = asRecord(choice.message);

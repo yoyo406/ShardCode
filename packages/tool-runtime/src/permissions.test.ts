@@ -41,6 +41,20 @@ describe("permission engine", () => {
     expect(engine.check({ toolName: "run_shell", risk: "shell", mode: "bypass", command: "echo unsafe" }).level).toBe("deny");
   });
 
+  it("does not treat an omitted isolation flag as proof for bypass mode", async () => {
+    const root = await workspace();
+    const engine = new PermissionEngine({ workspaceRoot: root, mode: "bypass" });
+
+    expect(engine.check({ toolName: "run_shell", risk: "shell", mode: "bypass", command: "echo unsafe" }).level).toBe("deny");
+  });
+
+  it("asks before an unscoped Git diff can disclose protected content", async () => {
+    const root = await workspace();
+    const engine = new PermissionEngine({ workspaceRoot: root, mode: "ask" });
+
+    expect(engine.check({ toolName: "git_diff", risk: "git", mode: "ask" }).level).toBe("ask");
+  });
+
   it("resolves matching rules by deny, ask, then allow priority", async () => {
     const root = await workspace();
     await mkdir(join(root, ".shardcode"));
@@ -56,5 +70,18 @@ describe("permission engine", () => {
     const engine = await PermissionEngine.create({ workspaceRoot: root, mode: "ask" });
     expect(engine.check({ toolName: "write_file", risk: "write", mode: "ask", path: "src/index.ts" }).level).toBe("allow");
     expect(engine.check({ toolName: "write_file", risk: "write", mode: "ask", path: "src/secrets/key.ts" }).level).toBe("deny");
+  });
+
+  it("ignores permission rules with invalid decisions", async () => {
+    const root = await workspace();
+    await mkdir(join(root, ".shardcode"));
+    await writeFile(
+      join(root, ".shardcode", "settings.json"),
+      JSON.stringify({ rules: [{ tool: "write_file", decision: "execute" }] })
+    );
+
+    const engine = await PermissionEngine.create({ workspaceRoot: root, mode: "ask" });
+
+    expect(engine.check({ toolName: "write_file", risk: "write", mode: "ask", path: "src/index.ts" }).level).toBe("ask");
   });
 });

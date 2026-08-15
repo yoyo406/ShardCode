@@ -114,12 +114,14 @@ describe("normalized providers", () => {
   });
 
   it("normalizes Gemini function calls", async () => {
+    let captured: { url: string; headers: Headers } | undefined;
     const provider = createProvider({
       provider: "gemini",
       model: request.model,
       apiKey: "test-key",
-      fetch: async () =>
-        jsonResponse({
+      fetch: async (input, init) => {
+        captured = { url: String(input), headers: new Headers(init?.headers) };
+        return jsonResponse({
           candidates: [
             {
               content: {
@@ -132,7 +134,8 @@ describe("normalized providers", () => {
             }
           ],
           usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 7, totalTokenCount: 12 }
-        })
+        });
+      }
     });
 
     const response = await provider.complete(request);
@@ -140,6 +143,9 @@ describe("normalized providers", () => {
     expect(response.message.content).toBe("I will read it.");
     expect(response.toolCalls[0]).toMatchObject({ name: "read_file", arguments: { path: "README.md" } });
     expect(response.usage?.totalTokens).toBe(12);
+    expect(captured?.url).toBe("https://generativelanguage.googleapis.com/v1beta/models/model-under-test:generateContent");
+    expect(captured?.url).not.toContain("test-key");
+    expect(captured?.headers.get("x-goog-api-key")).toBe("test-key");
   });
 
   it("returns scripted responses in order for deterministic tests", async () => {
@@ -157,5 +163,33 @@ describe("normalized providers", () => {
 
     await expect(provider.complete(request)).resolves.toEqual(first);
     await expect(provider.complete(request)).resolves.toEqual(second);
+  });
+
+  it("aborts a provider request after the configured timeout", async () => {
+    const provider = createProvider({
+      provider: "openai",
+      model: request.model,
+      apiKey: "test-key",
+      timeoutMs: 5,
+      fetch: async (_input, init) => {
+        if (!init?.signal) throw new Error("missing abort signal");
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      }
+    });
+
+    await expect(provider.complete(request)).rejects.toThrow("timed out");
+  });
+
+  it("rejects oversized provider response bodies", async () => {
+    const provider = createProvider({
+      provider: "openai",
+      model: request.model,
+      apiKey: "test-key",
+      fetch: async () => new Response("x".repeat(4 * 1024 * 1024 + 1), { status: 200 })
+    });
+
+    await expect(provider.complete(request)).rejects.toThrow("response exceeded");
   });
 });

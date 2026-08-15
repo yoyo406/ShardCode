@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runCli, type CliIO } from "./main.js";
+import * as mainModule from "./main.js";
 import type { TuiTerminal } from "./tui.js";
 
 function io(): CliIO & { output: string[]; errors: string[] } {
@@ -52,6 +53,15 @@ function tuiTerminal(answers: string[]): TuiTerminal & {
 }
 
 describe("CLI lifecycle", () => {
+  it("sanitizes final human-readable model output", () => {
+    const renderFinalMessage = (mainModule as typeof mainModule & {
+      renderFinalMessage?: (content: string) => string;
+    }).renderFinalMessage;
+
+    expect(typeof renderFinalMessage).toBe("function");
+    expect(renderFinalMessage?.("\u001b]8;;https://evil.test\u0007click\u001b]8;;\u0007")).toBe("click");
+  });
+
   it("runs a scripted provider without a network request", async () => {
     const testIo = io();
     const exitCode = await runCli(["run", "Run the checks", "--provider", "scripted", "--permission-mode", "acceptEdits"], testIo);

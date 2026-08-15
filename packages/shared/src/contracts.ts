@@ -213,6 +213,7 @@ export interface ProviderConfig {
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  timeoutMs?: number;
   fetch?: typeof globalThis.fetch;
 }
 

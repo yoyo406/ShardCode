@@ -6,7 +6,7 @@ import { AgentRuntime, JsonSessionStore } from "@shardcode/runtime";
 import { ToolRuntime } from "@shardcode/tool-runtime";
 import { parseArgs, HELP_TEXT, type CliOptions, type CliProvider } from "./args.js";
 import { askForPermission } from "./prompts.js";
-import { renderEvent } from "./render.js";
+import { renderEvent, sanitizeTerminalText } from "./render.js";
 import {
   createDefaultTuiTerminal,
   runInteractiveTui,
@@ -27,8 +27,8 @@ export interface CliIO {
 
 function defaultIO(): CliIO {
   return {
-    write: (line) => process.stdout.write(`${line}\n`),
-    error: (line) => process.stderr.write(`${line}\n`),
+    write: (line) => process.stdout.write(`${sanitizeTerminalText(line)}\n`),
+    error: (line) => process.stderr.write(`${sanitizeTerminalText(line)}\n`),
     ask: async (question) => askForPermission(question),
     tui: createDefaultTuiTerminal(),
     cwd: process.cwd(),
@@ -65,12 +65,17 @@ function buildProvider(options: CliOptions, env: Record<string, string | undefin
           toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command: "node -e \"console.log('scripted check')\"" } }]
         },
         toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command: "node -e \"console.log('scripted check')\"" } }],
-        finishReason: "tool_call"
+        finishReason: "tool_call",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
       },
       {
-        message: { role: "assistant", content: "SHARDCODE_VALIDATED: scripted repository checks completed" },
+        message: {
+          role: "assistant",
+          content: "SHARDCODE_VALIDATED: scripted repository checks completed"
+        },
         toolCalls: [],
-        finishReason: "stop"
+        finishReason: "stop",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
       }
     ]);
   }
@@ -109,6 +114,10 @@ function sessionSnapshot(session: Session): TuiSessionSnapshot {
   };
 }
 
+export function renderFinalMessage(content: string): string {
+  return sanitizeTerminalText(content);
+}
+
 async function executeTask(options: TaskCliOptions, io: CliIO): Promise<TaskExecutionResult> {
   try {
     const toolRuntime = await ToolRuntime.create({
@@ -116,7 +125,7 @@ async function executeTask(options: TaskCliOptions, io: CliIO): Promise<TaskExec
       mode: options.permissionMode,
       isolatedEnvironment: options.isolatedEnvironment,
       ask: async (request, decision) => io.ask ? io.ask(
-        `${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`,
+        sanitizeTerminalText(`${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`),
         request,
         decision
       ) : false
@@ -152,7 +161,7 @@ async function executeTask(options: TaskCliOptions, io: CliIO): Promise<TaskExec
     const session = options.command === "run"
       ? await runtime.run(options.prompt ?? "")
       : await runtime.resume(options.sessionId ?? "");
-    if (!options.json && session.finalMessage) io.write(session.finalMessage);
+    if (!options.json && session.finalMessage) io.write(renderFinalMessage(session.finalMessage));
     return {
       exitCode: session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1,
       session
