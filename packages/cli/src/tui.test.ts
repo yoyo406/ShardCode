@@ -395,6 +395,41 @@ describe("interactive TUI", () => {
     terminal.close();
   });
 
+  it("does not turn a CRLF split across chunks into an empty pasted line", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+
+    const secret = terminal.secret("Token: ");
+    streams.input.write("secret-key\r");
+
+    await expect(secret).resolves.toBe("secret-key");
+    streams.input.write("\n1\n/exit\n");
+
+    await expect(terminal.question("> ")).resolves.toBe("1");
+    await expect(terminal.question("> ")).resolves.toBe("/exit");
+    terminal.close();
+  });
+
+  it("stops buffering before a subsequent secret prompt", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+
+    const firstSecret = terminal.secret("Token: ");
+    streams.input.write("first-secret\r\n");
+    await expect(firstSecret).resolves.toBe("first-secret");
+
+    const secondSecret = terminal.secret("Token: ");
+    streams.input.write("second-secret\r\n");
+    await expect(secondSecret).resolves.toBe("second-secret");
+    expect(streams.outputText()).not.toContain("first-secret");
+    expect(streams.outputText()).not.toContain("second-secret");
+
+    const nextQuestion = terminal.question("> ");
+    streams.input.write("next\n");
+    await expect(nextQuestion).resolves.toBe("next");
+    terminal.close();
+  });
+
   it("sanitizes and warns on confirmation labels without styling the decision suffix", async () => {
     const streams = fakeTtyStreams();
     const terminal = createDefaultTuiTerminal({ ...streams, env: { COLORTERM: "truecolor" } });

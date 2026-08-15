@@ -519,6 +519,7 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
   const style: TuiStyle = (text, tone) => styleTuiText(text, tone, capabilities);
   let cancelActiveSecret: (() => void) | undefined;
   let pendingSecretLineBuffer = "";
+  let pendingSecretCarriageReturn = false;
   let pendingSecretQuestionResolve: ((line: string) => void) | undefined;
   let pendingSecretData: ((chunk: Buffer | string) => void) | undefined;
   const stopPendingSecretData = (): void => {
@@ -526,10 +527,25 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
     pendingSecretData = undefined;
     pendingSecretQuestionResolve = undefined;
     pendingSecretLineBuffer = "";
+    pendingSecretCarriageReturn = false;
   };
-  const startPendingSecretData = (): void => {
+  const stopPendingSecretDataIfIdle = (): void => {
+    if (
+      pendingSecretData
+      && pendingLines.length === 0
+      && pendingSecretLineBuffer === ""
+      && !pendingSecretCarriageReturn
+    ) stopPendingSecretData();
+  };
+  const startPendingSecretData = (carriageReturnAtChunkEnd: boolean): void => {
+    pendingSecretCarriageReturn = carriageReturnAtChunkEnd;
     pendingSecretData = (chunk) => {
-      pendingSecretLineBuffer += String(chunk);
+      let text = String(chunk);
+      if (pendingSecretCarriageReturn) {
+        if (text.startsWith("\n")) text = text.slice(1);
+        pendingSecretCarriageReturn = false;
+      }
+      pendingSecretLineBuffer += text;
       const lines = pendingSecretLineBuffer.split(/\r\n|\n|\r/);
       pendingSecretLineBuffer = lines.pop() ?? "";
       if (lines.length === 0) return;
@@ -539,12 +555,16 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
         resolve(lines.shift()!);
       }
       pendingLines.push(...lines);
+      stopPendingSecretDataIfIdle();
     };
     input.on("data", pendingSecretData);
   };
   const normalQuestion = async (prompt: string): Promise<string> => {
     const pending = pendingLines.shift();
-    if (pending !== undefined) return pending;
+    if (pending !== undefined) {
+      stopPendingSecretDataIfIdle();
+      return pending;
+    }
     if (pendingSecretData) {
       output.write(prompt);
       return new Promise<string>((resolve) => { pendingSecretQuestionResolve = resolve; });
@@ -574,9 +594,12 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
           input.setRawMode!(false);
           cancelActiveSecret = undefined;
           if (remainder) pendingLines.push(...remainder);
-          if (remainder !== undefined) startPendingSecretData();
+          if (remainder !== undefined) {
+            startPendingSecretData(textTerminatedWithCarriageReturn);
+          }
           resolve(value);
         };
+        let textTerminatedWithCarriageReturn = false;
         const onData = (chunk: Buffer | string): void => {
           const text = String(chunk);
           for (let index = 0; index < text.length; index += 1) {
@@ -595,6 +618,7 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
             }
             if (character === "\r" || character === "\n") {
               output.write("\n");
+              textTerminatedWithCarriageReturn = character === "\r" && index + 1 === text.length;
               restore(secret, secretInputRemainder(`${secret}${text.slice(index)}`));
               return;
             }
@@ -602,6 +626,7 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
             output.write("*");
           }
         };
+        stopPendingSecretData();
         cancelActiveSecret?.();
         cancelActiveSecret = () => restore(undefined);
         input.setRawMode!(true);
