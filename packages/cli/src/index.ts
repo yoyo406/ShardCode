@@ -2,6 +2,7 @@
 
 export * from "./args.js";
 export * from "./main.js";
+export * from "./provider-store.js";
 export * from "./render.js";
 export * from "./slash.js";
 export * from "./theme.js";

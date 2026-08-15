@@ -1,49 +1,74 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { JsonSessionStore } from "@shardcode/runtime";
+import { FileStorage } from "@shardcode/tool-runtime";
 import { runCli, writeFinalMessage, type CliIO } from "./main.js";
 import type { TuiTerminal } from "./tui.js";
 
-function io(): CliIO & { output: string[]; errors: string[] } {
+function io(overrides: Partial<Pick<CliIO, "cwd" | "env" | "fetch">> = {}): CliIO & { output: string[]; errors: string[] } {
   const value = {
     output: [] as string[],
     errors: [] as string[],
     write: (line: string) => value.output.push(line),
     error: (line: string) => value.errors.push(line),
     ask: async () => true,
-    cwd: process.cwd(),
-    env: {}
+    cwd: overrides.cwd ?? process.cwd(),
+    env: overrides.env ?? {}
+    , ...(overrides.fetch ? { fetch: overrides.fetch } : {})
   };
   return value;
 }
 
-function tuiTerminal(inputs: string[]): TuiTerminal & { output: string[]; finished: number[]; closed: number } {
-  const value = {
-    isTTY: true,
+function tuiTerminal(answers: string[]): TuiTerminal & {
+  output: string[];
+  errors: string[];
+  finished: number[];
+  statuses: string[];
+  clearCount: number;
+  closed: number;
+} {
+  const state = {
     output: [] as string[],
+    errors: [] as string[],
     finished: [] as number[],
-    closed: 0,
-    open: async () => undefined,
-    question: async () => inputs.shift() ?? "/exit",
-    confirm: async () => true,
-    write: (line: string) => value.output.push(line),
-    error: (line: string) => value.output.push(line),
-    clear: () => undefined,
-    setStatus: () => undefined,
-    finish: (exitCode: number) => value.finished.push(exitCode),
-    close: () => { value.closed += 1; }
+    statuses: [] as string[],
+    clearCount: 0,
+    closed: 0
   };
-  return value;
+  return {
+    isTTY: true,
+    output: state.output,
+    errors: state.errors,
+    finished: state.finished,
+    statuses: state.statuses,
+    get clearCount() { return state.clearCount; },
+    get closed() { return state.closed; },
+    open: () => undefined,
+    question: async () => answers.shift() ?? "/exit",
+    confirm: async () => true,
+    select: async (_title, options) => {
+      const index = Number(answers.shift());
+      return Number.isInteger(index) && index >= 0 && index < options.length ? index : undefined;
+    },
+    secret: async () => answers.shift(),
+    write: (line) => { state.output.push(line); },
+    error: (line) => { state.errors.push(line); },
+    clear: () => { state.clearCount += 1; },
+    setStatus: (status) => { state.statuses.push(status); },
+    finish: (exitCode) => { state.finished.push(exitCode); },
+    close: () => { state.closed += 1; }
+  };
 }
 
 describe("CLI lifecycle", () => {
   it("runs a scripted provider without a network request", async () => {
     const testIo = io();
-    const exitCode = await runCli(["run", "Run the checks", "--provider", "scripted", "--permission-mode", "acceptEdits"], testIo);
+    const exitCode = await runCli(["run", "Run the checks", "--provider", "scripted", "--permission-mode", "bypass", "--isolated-environment"], testIo);
 
     expect(exitCode).toBe(0);
-    expect(testIo.output.some((line) => line.includes("[session] completed"))).toBe(true);
+    expect(testIo.output.some((line) => line.includes("Session terminée (réussie)"))).toBe(true);
     expect(testIo.output.some((line) => line.includes("completed"))).toBe(true);
   });
 
@@ -52,7 +77,7 @@ describe("CLI lifecycle", () => {
     const terminal = tuiTerminal(["Run the checks", "/status", "/exit"]);
     testIo.tui = terminal;
 
-    const exitCode = await runCli(["--provider", "scripted", "--permission-mode", "acceptEdits"], testIo);
+    const exitCode = await runCli(["--provider", "scripted", "--permission-mode", "acceptEdits", "--isolated-environment"], testIo);
 
     expect(exitCode).toBe(0);
     expect(terminal.output.some((line) => line.includes("Session"))).toBe(true);
@@ -73,10 +98,10 @@ describe("CLI lifecycle", () => {
       return true;
     };
 
-    const run = runCli(["--provider", "scripted", "--permission-mode", "acceptEdits"], testIo);
+    const run = runCli(["--provider", "scripted", "--permission-mode", "acceptEdits", "--isolated-environment"], testIo);
     await new Promise<void>((resolve) => { asked = resolve; });
 
-    expect(terminal.output.some((line) => line.includes("[session] started"))).toBe(true);
+    expect(terminal.output.some((line) => line.includes("Session démarrée"))).toBe(true);
     expect(terminal.output.some((line) => line.includes("Status:") && line.includes("running"))).toBe(true);
 
     approve?.();
@@ -91,7 +116,9 @@ describe("CLI lifecycle", () => {
       id: sessionId,
       provider: "anthropic",
       model: "saved-model",
-      status: "completed"
+      status: "completed",
+      rootTask: { prompt: "Saved task" },
+      updatedAt: "2026-08-13T00:00:00.000Z"
     }));
     const testIo = io();
     testIo.cwd = root;
@@ -114,7 +141,9 @@ describe("CLI lifecycle", () => {
       id: sessionId,
       provider: "anthropic",
       model: "saved-model",
-      status: "completed"
+      status: "completed",
+      rootTask: { prompt: "Saved task" },
+      updatedAt: "2026-08-13T00:00:00.000Z"
     }));
     const testIo = io();
     testIo.cwd = root;
@@ -131,10 +160,12 @@ describe("CLI lifecycle", () => {
   it("sanitizes direct permission questions while preserving the raw authorization request", async () => {
     const root = await mkdtemp(join(tmpdir(), "shardcode-cli-permission-"));
     await mkdir(join(root, ".shardcode"), { recursive: true });
+    await mkdir(join(root, "packages", "cli", "dist"), { recursive: true });
+    await writeFile(join(root, "packages", "cli", "dist", "index.js"), "export {};\n");
     await writeFile(join(root, ".shardcode", "settings.json"), JSON.stringify({
       rules: [{
         tool: "run_shell",
-        command: "node -e \"console.log('scripted check')\n\t// scripted check\"",
+        command: "node --check packages/cli/dist/index.js",
         decision: "ask",
         reason: "review\u001b[2J\r\n\tthis command"
       }]
@@ -149,13 +180,13 @@ describe("CLI lifecycle", () => {
       return true;
     };
 
-    await expect(runCli(["run", "Run the checks", "--provider", "scripted", "--permission-mode", "acceptEdits"], testIo)).resolves.toBe(0);
+    await expect(runCli(["run", "Run the checks", "--provider", "scripted", "--permission-mode", "acceptEdits", "--isolated-environment"], testIo)).resolves.toBe(0);
 
     expect(question).toContain("run_shell:");
-    expect(question).toContain("console.log('scripted check')⏎⇥// scripted check");
+    expect(question).toContain("node --check packages/cli/dist/index.js");
     expect(question).toContain("review⏎⇥this command");
     expect(question).not.toMatch(/[\u001b\r\n\t]/);
-    expect(rawCommand).toBe("node -e \"console.log('scripted check')\n\t// scripted check\"");
+    expect(rawCommand).toBe("node --check packages/cli/dist/index.js");
   });
 
   it("keeps interactive settings truthful when slash commands request changes", async () => {
@@ -230,5 +261,103 @@ describe("CLI lifecycle", () => {
     writeFinalMessage(testIo, "\u001b[31mfinal\u001b[0m", true);
 
     expect(testIo.output).toEqual([]);
+  });
+
+  it("uses pnpm's invocation root instead of the CLI package directory", async () => {
+    const repositoryRoot = process.cwd();
+    const testIo = io({
+      cwd: join(repositoryRoot, "packages/cli"),
+      env: { INIT_CWD: repositoryRoot }
+    });
+    const sessionsPath = join(repositoryRoot, ".shardcode", "sessions");
+    const existingSessions = new Set((await readdir(sessionsPath).catch(() => [])).filter((name) => name.endsWith(".json")));
+
+    const exitCode = await runCli(["run", "Use the repository root", "--provider", "scripted", "--permission-mode", "bypass", "--isolated-environment"], testIo);
+
+    expect(exitCode).toBe(0);
+    expect(testIo.output).toContain("Session démarrée");
+    const sessionFile = (await readdir(sessionsPath)).find((name) => name.endsWith(".json") && !existingSessions.has(name));
+    const sessionId = sessionFile?.slice(0, -".json".length);
+    expect(sessionId).toBeTruthy();
+    const session = await new JsonSessionStore(new FileStorage(join(repositoryRoot, ".shardcode"))).load(sessionId ?? "");
+    expect(session?.workspaceRoot).toBe(repositoryRoot);
+  });
+
+  it("runs the interactive TUI through the scripted runtime lifecycle", async () => {
+    const testIo = io();
+    const terminal = tuiTerminal(["Run the checks", "/status", "/exit"]);
+    testIo.tui = terminal;
+
+    const exitCode = await runCli([
+      "--provider",
+      "scripted",
+      "--permission-mode",
+      "bypass",
+      "--isolated-environment"
+    ], testIo);
+
+    expect(exitCode).toBe(0);
+    expect(terminal.output.some((line) => line.includes("Session terminée (réussie)"))).toBe(true);
+    expect(terminal.output.some((line) => line.includes("Last session:"))).toBe(true);
+    expect(terminal.finished).toEqual([0]);
+    expect(terminal.closed).toBe(1);
+  });
+
+  it("handles slash commands locally without creating a second runtime task", async () => {
+    const testIo = io();
+    const terminal = tuiTerminal(["/model", "/permissions", "/help status", "/exit"]);
+    testIo.tui = terminal;
+
+    const exitCode = await runCli([
+      "--provider",
+      "scripted",
+      "--permission-mode",
+      "acceptEdits"
+    ], testIo);
+
+    expect(exitCode).toBe(0);
+    expect(terminal.output.some((line) => line.includes("Provider: scripted"))).toBe(true);
+    expect(terminal.output.some((line) => line.includes("Permission mode: acceptEdits"))).toBe(true);
+    expect(terminal.output.some((line) => line.includes("/status"))).toBe(true);
+    expect(terminal.finished).toEqual([0]);
+  });
+
+  it("connects a provider, discovers its models, and uses the stored connection", async () => {
+    const configHome = await mkdtemp(join(tmpdir(), "shardcode-connect-test-"));
+    const testIo = io({
+      env: { SHARDCODE_CONFIG_HOME: configHome },
+      fetch: async (_input, init) => {
+        if (init?.method === "GET") {
+          return new Response(JSON.stringify({ data: [{ id: "gpt-5.4", display_name: "GPT-5.4" }] }), { status: 200 });
+        }
+        const body = JSON.parse(String(init?.body)) as { messages?: Array<{ role?: string }> };
+        const hasToolResult = body.messages?.some((message) => message.role === "tool");
+        return new Response(JSON.stringify(hasToolResult
+          ? { choices: [{ message: { role: "assistant", content: "SHARDCODE_VALIDATED: connected task complete" }, finish_reason: "stop" }] }
+          : {
+              choices: [{
+                message: {
+                  role: "assistant",
+                  content: "Running validation.",
+                  tool_calls: [{ id: "validation-call", type: "function", function: { name: "run_shell", arguments: '{"command":"node --check packages/cli/dist/index.js"}' } }]
+                },
+                finish_reason: "tool_calls"
+              }]
+            }), { status: 200 });
+      }
+    });
+    const terminal = tuiTerminal(["/connect", "0", "test-key", "0", "Run connected task", "/exit"]);
+    testIo.tui = terminal;
+
+    try {
+      const exitCode = await runCli(["--permission-mode", "bypass", "--isolated-environment"], testIo);
+
+      expect(exitCode).toBe(0);
+      expect(terminal.output.some((line) => line.includes("Connected: OpenAI / GPT-5.4"))).toBe(true);
+      expect(terminal.output.some((line) => line.includes("connected task complete"))).toBe(true);
+      expect(terminal.output.join("\n")).not.toContain("test-key");
+    } finally {
+      await rm(configHome, { recursive: true, force: true });
+    }
   });
 });

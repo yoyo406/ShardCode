@@ -7,8 +7,8 @@
     "build": "pnpm -r --if-present build",
     "test": "pnpm build && vitest run",
     "lint": "pnpm -r --if-present lint",
-    "shardcode": "pnpm --filter @shardcode/cli start",
-    "shard": "pnpm --filter @shardcode/cli start"
+    "shard": "pnpm --filter @shardcode/cli start",
+    "shardcode": "pnpm --filter @shardcode/cli start"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

@@ -1,19 +1,20 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ToolDefinition } from "@shardcode/shared";
+import { isProtectedPathSegment } from "./paths.js";
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
-  { name: "read_file", description: "Read a UTF-8 file in the workspace.", risk: "read", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
-  { name: "write_file", description: "Create or replace a UTF-8 file in the workspace.", risk: "write", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
-  { name: "edit_file", description: "Replace one exact text range in a workspace file.", risk: "write", inputSchema: { type: "object", properties: { path: { type: "string" }, oldText: { type: "string" }, newText: { type: "string" } }, required: ["path", "oldText", "newText"] } },
-  { name: "delete_file", description: "Delete a file in the workspace.", risk: "write", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
-  { name: "list_files", description: "List files below a workspace directory.", risk: "read", inputSchema: { type: "object", properties: { path: { type: "string" } } } },
-  { name: "glob", description: "Find workspace files matching a glob pattern.", risk: "read", inputSchema: { type: "object", properties: { pattern: { type: "string" } }, required: ["pattern"] } },
-  { name: "grep", description: "Search workspace text files with a regular expression.", risk: "read", inputSchema: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" }, ignoreCase: { type: "boolean" } }, required: ["pattern"] } },
-  { name: "run_shell", description: "Run an approved shell command in the workspace sandbox.", risk: "shell", inputSchema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } },
-  { name: "git_status", description: "Show the current Git status.", risk: "git", inputSchema: { type: "object", properties: {} } },
-  { name: "git_diff", description: "Show the current Git diff.", risk: "git", inputSchema: { type: "object", properties: { path: { type: "string" } } } },
-  { name: "git_log", description: "Show recent Git history.", risk: "git", inputSchema: { type: "object", properties: { limit: { type: "number" } } } }
+  { name: "read_file", description: "Read a UTF-8 file in the workspace.", risk: "read", executionMode: "parallel", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+  { name: "write_file", description: "Create or replace a UTF-8 file in the workspace.", risk: "write", executionMode: "sequential", inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
+  { name: "edit_file", description: "Replace one exact text range in a workspace file.", risk: "write", executionMode: "sequential", inputSchema: { type: "object", properties: { path: { type: "string" }, oldText: { type: "string" }, newText: { type: "string" } }, required: ["path", "oldText", "newText"] } },
+  { name: "delete_file", description: "Delete a file in the workspace.", risk: "write", executionMode: "sequential", inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+  { name: "list_files", description: "List files below a workspace directory.", risk: "read", executionMode: "parallel", inputSchema: { type: "object", properties: { path: { type: "string" } } } },
+  { name: "glob", description: "Find workspace files matching a glob pattern.", risk: "read", executionMode: "parallel", inputSchema: { type: "object", properties: { pattern: { type: "string" } }, required: ["pattern"] } },
+  { name: "grep", description: "Search workspace text files with a regular expression.", risk: "read", executionMode: "parallel", inputSchema: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" }, ignoreCase: { type: "boolean" } }, required: ["pattern"] } },
+  { name: "run_shell", description: "Run an approved shell command in the workspace sandbox.", risk: "shell", executionMode: "sequential", inputSchema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } },
+  { name: "git_status", description: "Show the current Git status.", risk: "git", executionMode: "parallel", inputSchema: { type: "object", properties: {} } },
+  { name: "git_diff", description: "Show the current Git diff.", risk: "git", executionMode: "parallel", inputSchema: { type: "object", properties: { path: { type: "string" } } } },
+  { name: "git_log", description: "Show recent Git history.", risk: "git", executionMode: "parallel", inputSchema: { type: "object", properties: { limit: { type: "number" } } } }
 ];
 
 export interface InputRecord {
@@ -40,7 +41,13 @@ export async function walkFiles(root: string, current = root): Promise<string[]>
   const entries = await readdir(current, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === ".shardcode" || entry.name === "node_modules" || entry.name === "dist" || entry.name === "secrets") continue;
+    const name = entry.name.toLowerCase();
+    if (
+      isProtectedPathSegment(name) ||
+      name === ".shardcode" ||
+      name === "node_modules" ||
+      name === "dist"
+    ) continue;
     const path = join(current, entry.name);
     if (entry.isDirectory()) files.push(...(await walkFiles(root, path)));
     else if (entry.isFile()) files.push(path);
@@ -60,8 +67,13 @@ export function globToRegExp(pattern: string): RegExp {
     const char = pattern[index];
     if (char === "*") {
       if (pattern[index + 1] === "*") {
-        result += ".*";
-        index += 1;
+        if (pattern[index + 2] === "/") {
+          result += "(?:.*/)?";
+          index += 2;
+        } else {
+          result += ".*";
+          index += 1;
+        }
       } else result += "[^/]*";
     } else if (char === "?") result += "[^/]";
     else result += (char ?? "").replace(/[.+^${}()|[\]\\]/g, "\\$&");

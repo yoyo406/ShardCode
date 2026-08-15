@@ -17,11 +17,19 @@ import { renderEvent } from "./render.js";
 const info: TuiRuntimeInfo = {
   permissionMode: "acceptEdits",
   provider: "scripted",
-  model: "scripted-local"
+  model: "scripted-local",
+  isolatedEnvironment: false
 };
 
 function snapshot(): TuiSessionSnapshot {
-  return { sessionId: "abc-123", status: "completed" };
+  return {
+    id: "abc-123",
+    status: "completed",
+    provider: "scripted",
+    model: "scripted-local",
+    prompt: "Run the checks",
+    updatedAt: "2026-08-13T00:00:00.000Z"
+  };
 }
 
 function fakeTerminal(inputs: string[], isTTY = true): TuiTerminal & {
@@ -40,9 +48,11 @@ function fakeTerminal(inputs: string[], isTTY = true): TuiTerminal & {
     finished: [] as number[],
     closed: 0,
     statuses: [] as string[],
-    open: async () => undefined,
+    open: async (_workspaceRoot: string) => undefined,
     question: async () => inputs.shift() ?? "/exit",
     confirm: async () => false,
+    select: async (_title: string, options: readonly { id: string; label: string }[]) => options.length > 0 ? 0 : undefined,
+    secret: async () => undefined,
     write: (line: string) => value.output.push(line),
     error: (line: string) => value.errors.push(line),
     clear: () => { value.clearCount += 1; },
@@ -124,8 +134,8 @@ describe("interactive TUI", () => {
       execute: async () => ({ exitCode: 0 })
     })).resolves.toBe(0);
 
-    expect(terminal.output).toContain("/model [model] — show the active provider/model (read-only)");
-    expect(terminal.output).toContain("/exit or /quit — leave the interactive TUI");
+    expect(terminal.output.join("\n")).toContain("/model [model]");
+    expect(terminal.output.join("\n")).toContain("/exit");
     expect(terminal.output.some((line) => line.includes("/exit") && line.includes("/quit"))).toBe(true);
   });
 
@@ -330,7 +340,13 @@ describe("interactive TUI", () => {
         provider: "anthropic",
         model: "saved-model",
         permissionMode: "ask",
-        session: { sessionId: "saved-session", status: "aborted" }
+        session: {
+          ...snapshot(),
+          id: "saved-session",
+          status: "aborted",
+          provider: "anthropic",
+          model: "saved-model"
+        }
       })
     })).resolves.toBe(130);
 

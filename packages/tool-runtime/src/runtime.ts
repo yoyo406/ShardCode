@@ -13,7 +13,7 @@ import type {
 import { FileStorage } from "./storage.js";
 import { PermissionEngine } from "./permissions.js";
 import { ensureParent, globWorkspace, grepWorkspace, inputRecord, listWorkspaceFiles, requiredString, stringValue, TOOL_DEFINITIONS } from "./tools.js";
-import { quoteShell, resolveWorkspacePath } from "./paths.js";
+import { assertWorkspacePath, quoteShell, resolveWorkspacePath } from "./paths.js";
 
 export interface ToolRuntimeOptions {
   workspaceRoot: string;
@@ -22,6 +22,8 @@ export interface ToolRuntimeOptions {
   permissionEngine?: PermissionEngine;
   sandbox?: SandboxRunner;
   ask?: (request: PermissionRequest, decision: PermissionDecision) => Promise<boolean>;
+  maxOutputChars?: number;
+  shellTimeoutMs?: number;
 }
 
 export class ToolRuntime implements ToolInvoker {
@@ -31,12 +33,14 @@ export class ToolRuntime implements ToolInvoker {
   private readonly sandbox: SandboxRunner;
   private readonly ask: ToolRuntimeOptions["ask"];
   private readonly fileStorage: FileStorage;
+  private readonly maxOutputChars: number;
+  private readonly shellTimeoutMs: number | undefined;
 
   static async create(options: ToolRuntimeOptions): Promise<ToolRuntime> {
     const permissionEngine = options.permissionEngine ?? await PermissionEngine.create({
       workspaceRoot: options.workspaceRoot,
       mode: options.mode,
-      isolatedEnvironment: options.isolatedEnvironment ?? true
+      isolatedEnvironment: options.isolatedEnvironment ?? false
     });
     return new ToolRuntime({ ...options, permissionEngine });
   }
@@ -47,11 +51,13 @@ export class ToolRuntime implements ToolInvoker {
     this.permissions = options.permissionEngine ?? new PermissionEngine({
       workspaceRoot: options.workspaceRoot,
       mode: options.mode,
-      isolatedEnvironment: options.isolatedEnvironment ?? true
+      isolatedEnvironment: options.isolatedEnvironment ?? false
     });
-    this.sandbox = options.sandbox ?? createProcessSandbox({ isolated: true });
+    this.sandbox = options.sandbox ?? createProcessSandbox({ isolated: options.isolatedEnvironment === true });
     this.ask = options.ask;
     this.fileStorage = new FileStorage(join(options.workspaceRoot, ".shardcode"));
+    this.maxOutputChars = Math.max(1_000, options.maxOutputChars ?? 20_000);
+    this.shellTimeoutMs = options.shellTimeoutMs;
   }
 
   definitions(): ToolDefinition[] {
@@ -62,7 +68,8 @@ export class ToolRuntime implements ToolInvoker {
     return this.fileStorage;
   }
 
-  async execute(call: ToolCall): Promise<ToolResult> {
+  async execute(call: ToolCall, signal?: AbortSignal): Promise<ToolResult> {
+    if (signal?.aborted) return this.failed(call, "ABORTED", "tool execution was aborted");
     const definition = TOOL_DEFINITIONS.find((candidate) => candidate.name === call.name);
     if (!definition) {
       return this.failed(call, "UNKNOWN_TOOL", `unknown tool: ${call.name}`);
@@ -83,14 +90,23 @@ export class ToolRuntime implements ToolInvoker {
       const approved = this.ask ? await this.ask(request, decision) : false;
       if (!approved) return this.denied(call, { ...decision, reason: `${decision.reason}; approval was not granted` });
     }
+    if (pathValue !== undefined) {
+      try {
+        await assertWorkspacePath(this.workspaceRoot, pathValue);
+      } catch (error) {
+        return this.failed(call, "PATH_SECURITY", error instanceof Error ? error.message : String(error));
+      }
+    }
     try {
-      return await this.run(call, input);
+      return await this.run(call, input, signal);
     } catch (error) {
+      if (signal?.aborted) return this.failed(call, "ABORTED", "tool execution was aborted");
       return this.failed(call, "TOOL_EXECUTION_FAILED", error instanceof Error ? error.message : String(error));
     }
   }
 
-  private async run(call: ToolCall, input: ReturnType<typeof inputRecord>): Promise<ToolResult> {
+  private async run(call: ToolCall, input: ReturnType<typeof inputRecord>, signal?: AbortSignal): Promise<ToolResult> {
+    if (signal?.aborted) return this.failed(call, "ABORTED", "tool execution was aborted");
     switch (call.name) {
       case "read_file": {
         const target = this.path(requiredString(input, "path"));
@@ -124,30 +140,39 @@ export class ToolRuntime implements ToolInvoker {
       case "grep":
         return this.completed(call, await grepWorkspace(this.workspaceRoot, requiredString(input, "pattern"), typeof input.path === "string" ? input.path : "", input.ignoreCase === true));
       case "run_shell":
-        return this.runShell(call, requiredString(input, "command"));
+        return this.runShell(call, requiredString(input, "command"), signal);
       case "git_status":
-        return this.runGit(call, "git status --short");
+        return this.runGit(call, "git status --short", signal);
       case "git_diff":
-        return this.runGit(call, typeof input.path === "string" ? `git diff -- ${quoteShell(this.relativePath(input.path))}` : "git diff");
+        return this.runGit(call, typeof input.path === "string" ? `git diff -- ${quoteShell(this.relativePath(input.path))}` : "git diff", signal);
       case "git_log": {
         const limit = typeof input.limit === "number" && Number.isInteger(input.limit) ? Math.min(Math.max(input.limit, 1), 100) : 20;
-        return this.runGit(call, `git log --oneline -n ${limit}`);
+        return this.runGit(call, `git log --oneline -n ${limit}`, signal);
       }
       default:
         return this.failed(call, "UNKNOWN_TOOL", `unknown tool: ${call.name}`);
     }
   }
 
-  private async runShell(call: ToolCall, command: string): Promise<ToolResult> {
-    const result = await this.sandbox.execute({ command, cwd: this.workspaceRoot });
-    const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
+  private async runShell(call: ToolCall, command: string, signal?: AbortSignal): Promise<ToolResult> {
+    const result = await this.sandbox.execute({
+      command,
+      cwd: this.workspaceRoot,
+      ...(signal ? { signal } : {}),
+      ...(this.shellTimeoutMs !== undefined ? { timeoutMs: this.shellTimeoutMs } : {}),
+      maxOutputChars: this.maxOutputChars
+    });
+    const output = [result.stdout, result.stderr, ...(result.outputTruncated ? ["[…sortie shell tronquée…]"] : [])].filter(Boolean).join("\n");
+    if (signal?.aborted) {
+      return this.failed(call, "ABORTED", output || "command aborted", result.exitCode);
+    }
     return result.exitCode === 0
       ? this.completed(call, output, result.exitCode)
       : this.failed(call, "COMMAND_FAILED", output || `command exited with ${result.exitCode}`, result.exitCode);
   }
 
-  private async runGit(call: ToolCall, command: string): Promise<ToolResult> {
-    return this.runShell(call, command);
+  private async runGit(call: ToolCall, command: string, signal?: AbortSignal): Promise<ToolResult> {
+    return this.runShell(call, command, signal);
   }
 
   private path(requested: string): string {
@@ -165,7 +190,7 @@ export class ToolRuntime implements ToolInvoker {
       callId: call.id,
       toolName: call.name,
       status: "completed",
-      output,
+      output: this.limitOutput(output),
       ...(exitCode !== undefined ? { exitCode } : {})
     };
   }
@@ -175,10 +200,16 @@ export class ToolRuntime implements ToolInvoker {
       callId: call.id,
       toolName: call.name,
       status: "failed",
-      output: message,
-      error: { code, message },
+      output: this.limitOutput(message),
+      error: { code, message: this.limitOutput(message) },
       ...(exitCode !== undefined ? { exitCode } : {})
     };
+  }
+
+  private limitOutput(output: string): string {
+    if (output.length <= this.maxOutputChars) return output;
+    const suffix = `\n[…output tronqué à ${this.maxOutputChars} caractères…]`;
+    return `${output.slice(0, Math.max(0, this.maxOutputChars - suffix.length))}${suffix}`;
   }
 
   private denied(call: ToolCall, decision: PermissionDecision): ToolResult {

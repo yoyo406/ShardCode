@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { PermissionRule } from "@shardcode/shared";
 import { PermissionEngine } from "./permissions.js";
 
 async function workspace(): Promise<string> {
@@ -56,5 +57,25 @@ describe("permission engine", () => {
     const engine = await PermissionEngine.create({ workspaceRoot: root, mode: "ask" });
     expect(engine.check({ toolName: "write_file", risk: "write", mode: "ask", path: "src/index.ts" }).level).toBe("allow");
     expect(engine.check({ toolName: "write_file", risk: "write", mode: "ask", path: "src/secrets/key.ts" }).level).toBe("deny");
+  });
+
+  it("ignores malformed rule decisions instead of bypassing the default policy", async () => {
+    const root = await workspace();
+    await mkdir(join(root, ".shardcode"));
+    await writeFile(
+      join(root, ".shardcode", "settings.json"),
+      JSON.stringify({ rules: [{ tool: "write_file", path: "src/*", decision: "allow-by-accident" }] })
+    );
+
+    const engine = await PermissionEngine.create({ workspaceRoot: root, mode: "ask" });
+
+    expect(engine.check({ toolName: "write_file", risk: "write", mode: "ask", path: "src/index.ts" }).level).toBe("ask");
+
+    const directEngine = new PermissionEngine({
+      workspaceRoot: root,
+      mode: "ask",
+      settings: { rules: [{ tool: "write_file", path: "src/*", decision: "allow-by-accident" } as unknown as PermissionRule] }
+    });
+    expect(directEngine.check({ toolName: "write_file", risk: "write", mode: "ask", path: "src/index.ts" }).level).toBe("ask");
   });
 });

@@ -1,5 +1,7 @@
+import type { ProviderId } from "@shardcode/shared";
+
 export type CliCommand = "interactive" | "run" | "resume" | "help";
-export type CliProvider = "openai" | "anthropic" | "gemini" | "scripted";
+export type CliProvider = ProviderId;
 export type CliPermissionMode = "ask" | "acceptEdits" | "bypass";
 
 export interface CliOptions {
@@ -14,9 +16,35 @@ export interface CliOptions {
   maxTokens: number;
   maxToolCalls: number;
   maxWallClockSeconds: number;
+  maxContextCharacters: number;
   json: boolean;
   isolatedEnvironment: boolean;
 }
+
+const DEFAULTS = {
+  provider: "openai" as const,
+  model: "gpt-4o-mini",
+  permissionMode: "ask" as const,
+  maxTokens: 100_000,
+  maxToolCalls: 100,
+  maxWallClockSeconds: 1_800,
+  maxContextCharacters: 120_000
+};
+
+const SUPPORTED_PROVIDERS: readonly CliProvider[] = [
+  "openai",
+  "openai-codex",
+  "google-gemini",
+  "mistral",
+  "anthropic-claude",
+  "opencode-zen",
+  "opencode-go",
+  "cline",
+  "kilo-code",
+  "anthropic",
+  "gemini",
+  "scripted"
+];
 
 function defaults(): Omit<CliOptions, "command" | "prompt" | "sessionId"> {
   return {
@@ -28,19 +56,11 @@ function defaults(): Omit<CliOptions, "command" | "prompt" | "sessionId"> {
     maxTokens: DEFAULTS.maxTokens,
     maxToolCalls: DEFAULTS.maxToolCalls,
     maxWallClockSeconds: DEFAULTS.maxWallClockSeconds,
+    maxContextCharacters: DEFAULTS.maxContextCharacters,
     json: false,
     isolatedEnvironment: false
   };
 }
-
-const DEFAULTS = {
-  provider: "openai" as const,
-  model: "gpt-4o-mini",
-  permissionMode: "ask" as const,
-  maxTokens: 100_000,
-  maxToolCalls: 100,
-  maxWallClockSeconds: 1_800
-};
 
 function numberOption(name: string, value: string | undefined): number {
   if (value === undefined || value.length === 0) throw new Error(`${name} requires a value`);
@@ -58,18 +78,27 @@ function nextValue(argv: string[], index: number, option: string): [string, numb
 export function parseArgs(argv: string[]): CliOptions {
   const first = argv[0];
   if (first === "--help" || first === "-h" || first === "help") {
-    return {
-      command: "help",
-      ...defaults()
-    };
+    return { command: "help", ...defaults() };
   }
 
-  const command = first === "run" || first === "resume" ? first : "interactive";
-  const optionStart = command === "interactive" ? 0 : 1;
+  const explicitCommand = first === "run" || first === "resume";
+  const directPrompt = first && !explicitCommand && !first.startsWith("--") ? first : undefined;
+  const positional: string[] = directPrompt ? [directPrompt] : [];
+  let {
+    provider,
+    providerExplicit,
+    model,
+    modelExplicit,
+    permissionMode,
+    maxTokens,
+    maxToolCalls,
+    maxWallClockSeconds,
+    maxContextCharacters,
+    json,
+    isolatedEnvironment
+  } = defaults();
 
-  const positional: string[] = [];
-  let { provider, providerExplicit, model, modelExplicit, permissionMode, maxTokens, maxToolCalls, maxWallClockSeconds, json, isolatedEnvironment } = defaults();
-
+  const optionStart = explicitCommand || directPrompt ? 1 : 0;
   for (let index = optionStart; index < argv.length; index += 1) {
     const argument = argv[index];
     if (!argument) continue;
@@ -84,6 +113,7 @@ export function parseArgs(argv: string[]): CliOptions {
         maxTokens,
         maxToolCalls,
         maxWallClockSeconds,
+        maxContextCharacters,
         json,
         isolatedEnvironment
       };
@@ -92,10 +122,11 @@ export function parseArgs(argv: string[]): CliOptions {
       positional.push(argument);
       continue;
     }
+
     switch (argument) {
       case "--provider": {
         const [value, next] = nextValue(argv, index, argument);
-        if (!(["openai", "anthropic", "gemini", "scripted"] as string[]).includes(value)) throw new Error(`unsupported provider: ${value}`);
+        if (!(SUPPORTED_PROVIDERS as readonly string[]).includes(value)) throw new Error(`unsupported provider: ${value}`);
         provider = value as CliProvider;
         providerExplicit = true;
         index = next;
@@ -133,6 +164,12 @@ export function parseArgs(argv: string[]): CliOptions {
         index = next;
         break;
       }
+      case "--max-context-characters": {
+        const [value, next] = nextValue(argv, index, argument);
+        maxContextCharacters = numberOption(argument, value);
+        index = next;
+        break;
+      }
       case "--json":
         json = true;
         break;
@@ -150,6 +187,7 @@ export function parseArgs(argv: string[]): CliOptions {
           maxTokens,
           maxToolCalls,
           maxWallClockSeconds,
+          maxContextCharacters,
           json,
           isolatedEnvironment
         };
@@ -158,12 +196,17 @@ export function parseArgs(argv: string[]): CliOptions {
     }
   }
 
+  const command: "interactive" | "run" | "resume" = explicitCommand
+    ? first
+    : positional.length > 0
+      ? "run"
+      : "interactive";
   if (command === "run" && positional.length === 0) throw new Error("run requires a task prompt");
-  if (command === "resume" && positional.length === 0) throw new Error("resume requires a session id");
-  const resolvedCommand = command === "interactive" && positional.length > 0 ? "run" : command;
+  if (command === "resume" && positional.length !== 1) throw new Error("resume requires exactly one session id");
+
   return {
-    command: resolvedCommand,
-    ...(resolvedCommand === "run" ? { prompt: positional.join(" ") } : resolvedCommand === "resume" ? { sessionId: positional[0]! } : {}),
+    command,
+    ...(command === "run" ? { prompt: positional.join(" ") } : command === "resume" ? { sessionId: positional[0]! } : {}),
     provider,
     providerExplicit,
     model,
@@ -172,6 +215,7 @@ export function parseArgs(argv: string[]): CliOptions {
     maxTokens,
     maxToolCalls,
     maxWallClockSeconds,
+    maxContextCharacters,
     json,
     isolatedEnvironment
   };
@@ -188,12 +232,13 @@ Usage:
   shardcode resume <session-id> [options]
 
 Options:
-  --provider openai|anthropic|gemini|scripted
+  --provider openai|openai-codex|google-gemini|mistral|anthropic-claude|opencode-zen|opencode-go|cline|kilo-code|anthropic|gemini|scripted
   --model <model>
   --permission-mode ask|acceptEdits|bypass
   --max-tokens <number>
   --max-tool-calls <number>
   --max-wall-clock-seconds <number>
+  --max-context-characters <number>
   --isolated-environment   required for bypass mode
   --json                    render JSONL events
   --help`;

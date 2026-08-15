@@ -19,22 +19,66 @@ export function sanitizeTerminalText(value: string): string {
     .replace(ANSI_C1_CSI, "")
     .replace(ANSI_SINGLE, "")
     .replace(/\u001b/g, "")
-    .replace(/[\u0080-\u009f]/g, "")
     .replace(/\r/g, "")
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .replace(/[\u0080-\u009f]/g, "");
 }
 
-function text(value: unknown, fallback = ""): string {
-  return typeof value === "string" ? value : value == null ? fallback : String(value);
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
 }
 
-function field(data: Record<string, unknown>, name: string, fallback = ""): string {
-  return text(data[name], fallback);
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function nested(data: Record<string, unknown>, name: string): Record<string, unknown> {
-  const value = data[name];
-  return value !== null && typeof value === "object" ? value as Record<string, unknown> : {};
+function display(value: unknown, fallback = ""): string {
+  return value === undefined || value === null || value === "" ? fallback : String(value);
+}
+
+function toolDescription(data: Record<string, unknown>): string {
+  const call = record(data.call);
+  const input = record(call.input);
+  return text(input.command) ?? text(call.name) ?? text(data.toolName) ?? "outil";
+}
+
+function eventDetail(data: Record<string, unknown>, fallback: string): string {
+  const result = record(data.result);
+  const error = record(result.error);
+  return text(data.message) ?? text(result.output) ?? text(error.message) ?? fallback;
+}
+
+function permissionDetail(data: Record<string, unknown>): { tool: string; reason: string } {
+  const result = record(data.result);
+  const permission = record(result.permission);
+  return {
+    tool: text(result.toolName) ?? text(record(data.call).name) ?? "unknown",
+    reason: text(permission.reason) ?? text(result.output) ?? text(record(result.error).message) ?? "permission required"
+  };
+}
+
+function budgetDetail(value: unknown): string {
+  const message = text(value);
+  if (!message) return "la limite autorisée a été atteinte";
+  const tokenMatch = message.match(/^token budget exceeded(.*)$/i);
+  if (tokenMatch) return `la limite de tokens a été atteinte${tokenMatch[1] ?? ""}`;
+  const toolMatch = message.match(/^tool[- ]call budget exceeded(.*)$/i);
+  if (toolMatch) return `la limite d'appels d'outils a été atteinte${toolMatch[1] ?? ""}`;
+  const timeMatch = message.match(/^wall[- ]clock budget exceeded(.*)$/i);
+  if (timeMatch) return `la durée maximale a été atteinte${timeMatch[1] ?? ""}`;
+  return message;
+}
+
+function sessionStatus(value: unknown): string {
+  const labels: Record<string, string> = {
+    completed: "réussie",
+    failed: "échouée",
+    aborted: "interrompue",
+    pending: "en attente",
+    running: "en cours"
+  };
+  const status = text(value)?.toLowerCase();
+  return (status && labels[status]) ?? "terminée";
 }
 
 function humanLine(line: string, tone: TuiTone, options?: RenderOptions): string {
@@ -54,95 +98,122 @@ export function renderEvent(
   }
 
   const data = event.data;
-  const call = nested(data, "call");
-  const result = nested(data, "result");
-  const status = field(data, "status", "completed");
   let line: string;
   let tone: TuiTone;
 
   switch (event.type) {
     case "SessionStarted":
-      line = `[session] started ${event.sessionId}`;
+      line = "Session démarrée";
       tone = "primary";
       break;
     case "AgentStarted":
-      line = `[agent] started ${field(data, "provider", "ShardCode")} ${field(data, "model")}`.trim();
+      line = "Agent démarré";
+      tone = "info";
+      break;
+    case "AgentAborted":
+      line = `Exécution interrompue : ${eventDetail(data, "la tâche a été interrompue")}`;
+      tone = "warning";
+      break;
+    case "TurnStarted":
+      line = `Tour ${display(data.turn, "0")} démarré`;
+      tone = "info";
+      break;
+    case "TurnCompleted":
+      line = `Tour ${display(data.turn, "0")} terminé`;
+      tone = "info";
+      break;
+    case "ContextUpdated":
+      line = "Contexte du projet mis à jour";
+      tone = "info";
+      break;
+    case "ContextCompacted":
+      line = `Contexte compacté (${display(data.omittedMessages, "0")} message(s) omis)`;
       tone = "info";
       break;
     case "ModelRequestStarted":
-      line = `[model] request (turn ${field(data, "turn", "0")})`;
+      line = "Réflexion en cours…";
       tone = "info";
       break;
-    case "ModelResponseReceived":
-      line = `[model] response (${field(data, "toolCallCount", "0")} tool call(s))`;
+    case "ModelResponseReceived": {
+      const toolCallCount = typeof data.toolCallCount === "number" ? data.toolCallCount : 0;
+      line = toolCallCount > 0
+        ? `Réponse reçue (${toolCallCount} outil${toolCallCount === 1 ? "" : "s"} à exécuter)`
+        : "Réponse reçue";
       tone = "info";
       break;
+    }
     case "ToolRequested":
-      line = `[tool] requested ${field(call, "name", "unknown")}`;
+      line = `Exécution : ${toolDescription(data)}`;
       tone = "accent";
       break;
     case "ToolStarted":
-      line = `[tool] started ${field(data, "toolName", "unknown")}`;
-      tone = "accent";
-      break;
+      return;
     case "ToolCompleted":
-      line = `[tool] completed ${field(data, "executionId")}`;
+      line = "Terminé";
       tone = "success";
       break;
-    case "ToolFailed": {
-      const permission = nested(result, "permission");
-      line = result.status === "denied"
-        ? `[permission] denied ${field(call, "name", field(result, "toolName", "unknown"))}: ${field(permission, "reason", "permission required")}`
-        : `Échec : ${field(result, "output", field(nested(result, "error"), "message", "unknown error"))}`;
-      tone = result.status === "denied" ? "warning" : "error";
+    case "ToolDenied": {
+      const permission = permissionDetail(data);
+      line = `[permission] denied ${permission.tool}: ${permission.reason}`;
+      tone = "warning";
       break;
     }
-    case "ContextUpdated":
-      line = `[context] updated (${field(data, "fileCount", "0")} file(s), ${field(data, "matchCount", "0")} match(es))`;
-      tone = "info";
+    case "ToolFailed": {
+      const result = record(data.result);
+      if (result.status === "denied") {
+        const permission = permissionDetail(data);
+        line = `[permission] denied ${permission.tool}: ${permission.reason}`;
+        tone = "warning";
+      } else {
+        line = `Échec : ${eventDetail(data, "une erreur est survenue")}`;
+        tone = "error";
+      }
       break;
+    }
     case "SubAgentSpawned":
-      line = `[sub-agent] spawned ${field(data, "agentId", field(data, "name", "unknown"))}`;
+      line = "Sous-agent démarré";
       tone = "accent";
       break;
     case "SubAgentCompleted":
-      line = `[sub-agent] completed ${field(data, "agentId", field(data, "name", "unknown"))}`;
+      line = "Sous-agent terminé";
       tone = "success";
       break;
     case "TestStarted":
-      line = `[test] started ${field(data, "name", field(data, "command"))}`;
+      line = "Tests en cours…";
       tone = "info";
       break;
     case "TestFailed":
-      line = `[test] failed: ${field(data, "message", field(data, "error", "unknown error"))}`;
+      line = `Tests en échec : ${eventDetail(data, "la suite a échoué")}`;
       tone = "error";
       break;
     case "TestPassed":
-      line = `[test] passed ${field(data, "name", field(data, "command"))}`.trim();
+      line = "Tests réussis";
       tone = "success";
       break;
     case "ValidationStarted":
-      line = "[validation] started";
+      line = "Validation…";
       tone = "info";
       break;
     case "ValidationPassed":
-      line = "[validation] passed";
+      line = "Validation réussie";
       tone = "success";
       break;
     case "BudgetExceeded":
-      line = `[runtime] BudgetExceeded: ${field(data, "message")}`;
+      line = `Limite atteinte : ${budgetDetail(data.message)}`;
       tone = "error";
       break;
     case "ThrashingDetected":
-      line = `[runtime] ThrashingDetected: ${field(data, "message")}`;
+      line = "Arrêt : la même opération a échoué plusieurs fois";
       tone = "warning";
       break;
-    case "SessionCompleted":
-      line = `[session] ${status}`;
-      tone = status === "completed" ? "success" : "error";
+    case "SessionCompleted": {
+      const status = display(data.status, "completed");
+      line = `Session terminée (${sessionStatus(status)})`;
+      tone = status === "completed" ? "success" : status === "aborted" ? "warning" : "error";
       break;
+    }
     default:
-      line = `[${event.type}]`;
+      line = "Étape en cours";
       tone = "normal";
   }
 
