@@ -518,9 +518,37 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
   const pendingLines: string[] = [];
   const style: TuiStyle = (text, tone) => styleTuiText(text, tone, capabilities);
   let cancelActiveSecret: (() => void) | undefined;
+  let pendingSecretLineBuffer = "";
+  let pendingSecretQuestionResolve: ((line: string) => void) | undefined;
+  let pendingSecretData: ((chunk: Buffer | string) => void) | undefined;
+  const stopPendingSecretData = (): void => {
+    if (pendingSecretData) input.removeListener("data", pendingSecretData);
+    pendingSecretData = undefined;
+    pendingSecretQuestionResolve = undefined;
+    pendingSecretLineBuffer = "";
+  };
+  const startPendingSecretData = (): void => {
+    pendingSecretData = (chunk) => {
+      pendingSecretLineBuffer += String(chunk);
+      const lines = pendingSecretLineBuffer.split(/\r\n|\n|\r/);
+      pendingSecretLineBuffer = lines.pop() ?? "";
+      if (lines.length === 0) return;
+      if (pendingSecretQuestionResolve) {
+        const resolve = pendingSecretQuestionResolve;
+        pendingSecretQuestionResolve = undefined;
+        resolve(lines.shift()!);
+      }
+      pendingLines.push(...lines);
+    };
+    input.on("data", pendingSecretData);
+  };
   const normalQuestion = async (prompt: string): Promise<string> => {
     const pending = pendingLines.shift();
     if (pending !== undefined) return pending;
+    if (pendingSecretData) {
+      output.write(prompt);
+      return new Promise<string>((resolve) => { pendingSecretQuestionResolve = resolve; });
+    }
     output.write(prompt);
     return readline.question("");
   };
@@ -546,6 +574,7 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
           input.setRawMode!(false);
           cancelActiveSecret = undefined;
           if (remainder) pendingLines.push(...remainder);
+          if (remainder !== undefined) startPendingSecretData();
           resolve(value);
         };
         const onData = (chunk: Buffer | string): void => {
@@ -589,6 +618,7 @@ export function createDefaultTuiTerminal(options: DefaultTuiTerminalOptions = {}
     finish: () => undefined,
     close: () => {
       cancelActiveSecret?.();
+      stopPendingSecretData();
       readline.close();
     }
   };

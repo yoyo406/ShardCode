@@ -380,6 +380,21 @@ describe("interactive TUI", () => {
     terminal.close();
   });
 
+  it("preserves pasted lines arriving after the secret terminator in a later chunk", async () => {
+    const streams = fakeTtyStreams();
+    const terminal = createDefaultTuiTerminal({ ...streams, env: {} });
+
+    const secret = terminal.secret("Token: ");
+    streams.input.write("secret-key\r\n");
+
+    await expect(secret).resolves.toBe("secret-key");
+    streams.input.write("1\n/exit\n");
+
+    await expect(terminal.question("> ")).resolves.toBe("1");
+    await expect(terminal.question("> ")).resolves.toBe("/exit");
+    terminal.close();
+  });
+
   it("sanitizes and warns on confirmation labels without styling the decision suffix", async () => {
     const streams = fakeTtyStreams();
     const terminal = createDefaultTuiTerminal({ ...streams, env: { COLORTERM: "truecolor" } });
