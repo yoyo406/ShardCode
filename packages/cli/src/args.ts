@@ -140,7 +140,6 @@ export function parseArgs(argv: string[]): CliOptions {
         isolatedEnvironment = true;
         break;
       case "--help":
-      case "-h":
         return {
           command: "help",
           provider,
