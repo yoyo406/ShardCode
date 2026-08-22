@@ -27,7 +27,19 @@ describe("CLI arguments", () => {
     expect(parseArgs(["resume", "session-123"])).toMatchObject({ command: "resume", sessionId: "session-123" });
   });
 
+<<<<<<< HEAD
+  it("preserves a bare task when options come first", () => {
+    expect(parseArgs(["--provider", "scripted", "Run the checks"])).toMatchObject({
+      command: "run",
+      prompt: "Run the checks",
+      provider: "scripted"
+    });
+  });
+
+  it("parses a run task and execution controls", () => {
+=======
   it("parses execution and context controls", () => {
+>>>>>>> origin/main
     expect(parseArgs([
       "run",
       "Implement OAuth",
@@ -54,8 +66,14 @@ describe("CLI arguments", () => {
     });
   });
 
+<<<<<<< HEAD
+  it("parses resume and rejects unknown options", () => {
+    expect(parseArgs(["resume", "session-123"])).toMatchObject({ command: "resume", sessionId: "session-123" });
+    expect(() => parseArgs(["resume", "session-123", "extra"])).toThrow("accepts one session id");
+=======
   it("requires exactly one resume id and rejects unknown options", () => {
     expect(() => parseArgs(["resume", "session-123", "extra"])).toThrow("session id");
+>>>>>>> origin/main
     expect(() => parseArgs(["run", "task", "--not-real"])).toThrow("unknown option");
   });
 

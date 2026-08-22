@@ -269,8 +269,12 @@ export interface ProviderConfig {
   model: string;
   apiKey?: string;
   baseUrl?: string;
+<<<<<<< HEAD
+  timeoutMs?: number;
+=======
   protocol?: ProviderProtocol;
   verification?: "verified" | "unverified";
+>>>>>>> origin/main
   fetch?: typeof globalThis.fetch;
 }
 

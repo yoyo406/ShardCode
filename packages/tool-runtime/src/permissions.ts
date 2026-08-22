@@ -30,6 +30,18 @@ function matches(value: string | undefined, pattern: string | undefined): boolea
   return new RegExp(`^${escaped}$`).test(value);
 }
 
+function isPermissionRule(value: unknown): value is PermissionRule {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const rule = value as Record<string, unknown>;
+  return (
+    (rule.tool === undefined || typeof rule.tool === "string") &&
+    (rule.path === undefined || typeof rule.path === "string") &&
+    (rule.command === undefined || typeof rule.command === "string") &&
+    (rule.decision === "allow" || rule.decision === "ask" || rule.decision === "deny") &&
+    (rule.reason === undefined || typeof rule.reason === "string")
+  );
+}
+
 function matchingRule(request: PermissionRequest, rule: PermissionRule): boolean {
   const path = request.path ? normalizeRulePath(request.path) : undefined;
   return (
@@ -60,11 +72,15 @@ async function loadSettings(path: string): Promise<PermissionSettings> {
     const value: unknown = JSON.parse(content);
     if (typeof value !== "object" || value === null) return {};
     const rules = (value as { rules?: unknown }).rules;
+<<<<<<< HEAD
+    return Array.isArray(rules) ? { rules: rules.filter(isPermissionRule) } : {};
+=======
     if (!Array.isArray(rules)) return {};
     return { rules: rules.flatMap((rule) => {
       const parsed = parseRule(rule);
       return parsed ? [parsed] : [];
     }) };
+>>>>>>> origin/main
   } catch {
     return {};
   }
@@ -124,6 +140,10 @@ export class PermissionEngine {
         reason: rule.reason ?? `matched ${rule.decision} permission rule`,
         matchedRule: rule
       };
+    }
+
+    if (request.toolName === "git_diff" && request.path === undefined) {
+      return { level: "ask", reason: "an unscoped Git diff may disclose protected files" };
     }
 
     if (this.options.mode === "bypass") {

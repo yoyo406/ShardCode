@@ -23,7 +23,9 @@ export class BudgetTracker {
   }
 
   recordTokens(tokens: number): void {
-    if (tokens < 0 || !Number.isFinite(tokens)) return;
+    if (tokens < 0 || !Number.isFinite(tokens) || !Number.isInteger(tokens)) {
+      throw new BudgetExceededError(`invalid token usage (${tokens})`);
+    }
     const next = this.current.usedTokens + tokens;
     if (next > this.current.maxTokens) {
       this.current.usedTokens = next;

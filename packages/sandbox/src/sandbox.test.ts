@@ -28,6 +28,38 @@ describe("process sandbox", () => {
     ).rejects.toThrow("process sandbox is unavailable");
   });
 
+<<<<<<< HEAD
+  it("fails closed when isolated mode has no injected executor", async () => {
+    const sandbox = createProcessSandbox({ isolated: true });
+
+    await expect(
+      sandbox.execute({ command: "echo unsafe", cwd: "/repo" })
+    ).rejects.toThrow("isolated executor");
+  });
+
+  it("terminates local commands that exceed the configured timeout", async () => {
+    const sandbox = createProcessSandbox({ isolated: false, allowUnisolated: true, timeoutMs: 5 });
+
+    const result = await sandbox.execute({
+      command: "node -e \"setTimeout(() => {}, 1000)\"",
+      cwd: process.cwd()
+    });
+
+    expect(result.exitCode).toBe(124);
+    expect(result.stderr).toContain("timed out");
+  });
+
+  it("bounds captured local command output", async () => {
+    const sandbox = createProcessSandbox({ isolated: false, allowUnisolated: true, maxOutputBytes: 1024 });
+
+    const result = await sandbox.execute({
+      command: "head -c 2000000 /dev/zero",
+      cwd: process.cwd()
+    });
+
+    expect(result.stdout.length).toBeLessThanOrEqual(1_100);
+    expect(result.stderr).toContain("output truncated");
+=======
   it.skipIf(process.platform === "win32")("terminates descendants on timeout", async () => {
     const root = await mkdtemp(join(tmpdir(), "shardcode-sandbox-"));
     const marker = join(root, "descendant.txt");
@@ -39,5 +71,6 @@ describe("process sandbox", () => {
 
     expect(result.exitCode).toBe(124);
     await expect(readFile(marker, "utf8")).rejects.toThrow();
+>>>>>>> origin/main
   });
 });

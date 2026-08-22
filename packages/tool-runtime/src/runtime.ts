@@ -52,8 +52,19 @@ export class ToolRuntime implements ToolInvoker {
       workspaceRoot: options.workspaceRoot,
       mode: options.mode,
       isolatedEnvironment: options.isolatedEnvironment ?? false
+<<<<<<< HEAD
+    });
+    this.sandbox = options.sandbox ?? createProcessSandbox({
+      // Local process execution is acceptable only after an explicit approval.
+      // Bypass mode must have a real sandbox injected by the host and therefore
+      // fails closed when none is available.
+      isolated: false,
+      allowUnisolated: options.mode !== "bypass"
+    });
+=======
     });
     this.sandbox = options.sandbox ?? createProcessSandbox({ isolated: options.isolatedEnvironment === true });
+>>>>>>> origin/main
     this.ask = options.ask;
     this.fileStorage = new FileStorage(join(options.workspaceRoot, ".shardcode"));
     this.maxOutputChars = Math.max(1_000, options.maxOutputChars ?? 20_000);

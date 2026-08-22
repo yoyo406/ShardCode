@@ -11,6 +11,8 @@ import type {
 
 export type FetchFunction = NonNullable<ProviderConfig["fetch"]>;
 export type JsonRecord = Record<string, unknown>;
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 export function getFetch(config: ProviderConfig): FetchFunction {
   return config.fetch ?? globalThis.fetch;
@@ -104,16 +106,41 @@ export async function fetchJson(
   url: string,
   init: RequestInit,
   provider: string,
-  maxAttempts = 3
+  maxAttempts = 3,
+  timeoutMs = DEFAULT_TIMEOUT_MS
 ): Promise<JsonRecord> {
   let lastError: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
+<<<<<<< HEAD
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+      let response: Response;
+      try {
+        response = await fetcher(url, { ...init, signal: controller.signal });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          throw new ProviderError(`${provider} request timed out`, { retryable: false, cause: error });
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+      const declaredLength = Number(response.headers.get("content-length"));
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+        throw new ProviderError(`${provider} response exceeded ${MAX_RESPONSE_BYTES} bytes`, {
+          retryable: false,
+          statusCode: response.status
+        });
+      }
+      const text = await readResponseText(response, provider);
+=======
       if (init.signal?.aborted) {
         throw init.signal.reason instanceof Error ? init.signal.reason : new Error("provider request aborted");
       }
       const response = await fetcher(url, init);
       const text = await response.text();
+>>>>>>> origin/main
       let body: unknown = {};
       if (text.length > 0) {
         try {
@@ -149,6 +176,43 @@ export async function fetchJson(
     }
   }
   throw new ProviderError(`${provider} request failed`, { retryable: true, cause: lastError });
+}
+
+async function readResponseText(response: Response, provider: string): Promise<string> {
+  if (!response.body) {
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > MAX_RESPONSE_BYTES) {
+      throw new ProviderError(`${provider} response exceeded ${MAX_RESPONSE_BYTES} bytes`, {
+        retryable: false,
+        statusCode: response.status
+      });
+    }
+    return text;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    total += next.value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new ProviderError(`${provider} response exceeded ${MAX_RESPONSE_BYTES} bytes`, {
+        retryable: false,
+        statusCode: response.status
+      });
+    }
+    chunks.push(next.value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
 }
 
 export function requireApiKey(config: ProviderConfig): string {

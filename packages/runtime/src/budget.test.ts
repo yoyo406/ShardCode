@@ -14,6 +14,13 @@ describe("budget tracker", () => {
     expect(() => tracker.recordTokens(11)).toThrow("token budget");
   });
 
+<<<<<<< HEAD
+  it("rejects invalid token usage instead of silently ignoring it", () => {
+    const tracker = new BudgetTracker({ maxTokens: 20, maxToolCalls: 2, maxWallClockSeconds: 60 });
+
+    expect(() => tracker.recordTokens(-1)).toThrow("invalid token usage");
+    expect(() => tracker.recordTokens(Number.NaN)).toThrow("invalid token usage");
+=======
   it("enforces wall-clock time from a persisted session start", () => {
     const persistedBudget = {
       maxTokens: 20,
@@ -26,5 +33,6 @@ describe("budget tracker", () => {
     const tracker = new BudgetTracker(persistedBudget);
 
     expect(() => tracker.assertWallClock()).toThrow("wall-clock budget");
+>>>>>>> origin/main
   });
 });

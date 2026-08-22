@@ -24,11 +24,20 @@ export function isProtectedPathSegment(value: string): boolean {
 }
 
 function isProtectedRelativePath(value: string): boolean {
+<<<<<<< HEAD
+  const normalized = value.replaceAll("\\", "/").toLowerCase();
+  const segments = normalized.split(/[\\/]+/).filter(Boolean);
+  const basename = segments.at(-1) ?? "";
+  const protectedDirectory = segments.some((segment) =>
+    [".git", ".shardcode", "secrets", "secret", "credentials"].includes(segment)
+=======
   const segments = value.split(/[\\/]+/).filter(Boolean);
   return (
     segments.some(isProtectedPathSegment) ||
     value === ".shardcode/settings.local.json"
+>>>>>>> origin/main
   );
+  return protectedDirectory || basename === ".env" || basename.startsWith(".env.");
 }
 
 function existingRealPath(value: string): string {

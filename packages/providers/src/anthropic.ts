@@ -76,7 +76,9 @@ export function createAnthropicProvider(config: ProviderConfig): ModelProvider {
           body: JSON.stringify(body),
           ...(request.signal ? { signal: request.signal } : {})
         },
-        "Anthropic"
+        "Anthropic",
+        3,
+        config.timeoutMs
       );
       const blocks = asArray(payload.content);
       const text = blocks
