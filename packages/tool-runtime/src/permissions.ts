@@ -72,15 +72,11 @@ async function loadSettings(path: string): Promise<PermissionSettings> {
     const value: unknown = JSON.parse(content);
     if (typeof value !== "object" || value === null) return {};
     const rules = (value as { rules?: unknown }).rules;
-<<<<<<< HEAD
-    return Array.isArray(rules) ? { rules: rules.filter(isPermissionRule) } : {};
-=======
     if (!Array.isArray(rules)) return {};
     return { rules: rules.flatMap((rule) => {
       const parsed = parseRule(rule);
       return parsed ? [parsed] : [];
     }) };
->>>>>>> origin/main
   } catch {
     return {};
   }

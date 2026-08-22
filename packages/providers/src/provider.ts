@@ -112,35 +112,11 @@ export async function fetchJson(
   let lastError: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-<<<<<<< HEAD
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
-      let response: Response;
-      try {
-        response = await fetcher(url, { ...init, signal: controller.signal });
-      } catch (error) {
-        if (controller.signal.aborted) {
-          throw new ProviderError(`${provider} request timed out`, { retryable: false, cause: error });
-        }
-        throw error;
-      } finally {
-        clearTimeout(timeout);
-      }
-      const declaredLength = Number(response.headers.get("content-length"));
-      if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
-        throw new ProviderError(`${provider} response exceeded ${MAX_RESPONSE_BYTES} bytes`, {
-          retryable: false,
-          statusCode: response.status
-        });
-      }
-      const text = await readResponseText(response, provider);
-=======
       if (init.signal?.aborted) {
         throw init.signal.reason instanceof Error ? init.signal.reason : new Error("provider request aborted");
       }
       const response = await fetcher(url, init);
       const text = await response.text();
->>>>>>> origin/main
       let body: unknown = {};
       if (text.length > 0) {
         try {

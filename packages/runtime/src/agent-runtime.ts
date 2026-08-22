@@ -157,28 +157,8 @@ export class AgentRuntime {
     return this.activeRun?.controller.signal;
   }
 
-<<<<<<< HEAD
-  async resume(id: string): Promise<Session> {
-    const session = await this.options.sessionStore.load(id);
-    if (!session) throw new Error(`session not found: ${id}`);
-    if (session.status === "completed") {
-      const validation = session.rootTask.validation;
-      if (
-        session.rootTask.status !== "completed" ||
-        validation?.markerSeen !== true ||
-        validation.passedCommands.length === 0 ||
-        !session.finalMessage?.includes(VALIDATION_MARKER)
-      ) {
-        throw new Error("completed session is missing validation proof");
-      }
-      return session;
-    }
-    await this.emit(session, "AgentStarted", { resumed: true });
-    return this.executeSession(session, true);
-=======
   abort(): void {
     this.activeRun?.controller.abort(new AgentAbortedError());
->>>>>>> origin/main
   }
 
   async run(prompt: string, signal?: AbortSignal): Promise<Session> {
@@ -280,24 +260,11 @@ export class AgentRuntime {
         this.throwIfAborted(signal);
         tracker.assertWallClock();
         session.budget = tracker.snapshot();
-<<<<<<< HEAD
-        const remainingTokens = session.budget.maxTokens - session.budget.usedTokens;
-        if (remainingTokens <= 0) throw new BudgetExceededError("token budget exhausted before the next model turn");
-=======
         await this.emit(session, "TurnStarted", { turn: turns });
->>>>>>> origin/main
         await this.emit(session, "ModelRequestStarted", { turn: turns, messageCount: session.messages.length });
         const modelMessages = await this.prepareModelMessages(session, signal);
         const request: ModelRequest = {
           model: this.options.provider.model,
-<<<<<<< HEAD
-          messages: session.messages,
-          tools: this.options.tools.definitions(),
-          maxOutputTokens: remainingTokens
-        };
-        const response = validateModelResponse(await this.completeWithProviderRetry(request));
-        tracker.recordTokens(response.usage?.totalTokens ?? remainingTokens);
-=======
           messages: modelMessages,
           tools: this.options.tools.definitions(),
           signal
@@ -305,7 +272,6 @@ export class AgentRuntime {
         const response = await this.completeWithProviderRetry(request, signal);
         this.throwIfAborted(signal);
         tracker.recordTokens(response.usage?.totalTokens ?? 0);
->>>>>>> origin/main
         session.budget = tracker.snapshot();
         session.messages.push(response.message);
         await this.emit(session, "ModelResponseReceived", {
@@ -336,15 +302,6 @@ export class AgentRuntime {
             execution.result = result;
             execution.status = result.status === "completed" ? "completed" : result.status === "denied" ? "denied" : "failed";
             session.messages.push(toolMessage(call, result));
-<<<<<<< HEAD
-            if (
-              call.name === "run_shell" &&
-              result.status === "completed" &&
-              typeof (call.input as { command?: unknown }).command === "string" &&
-              isValidationCommand((call.input as { command: string }).command)
-            ) {
-              successfulValidationCommands.add((call.input as { command: string }).command);
-=======
             const command = (call.input as { command?: unknown }).command;
             if (call.name === "run_shell" && typeof command === "string" && isValidationCommand(command)) {
               if (result.status === "completed") {
@@ -353,7 +310,6 @@ export class AgentRuntime {
               } else {
                 failedValidationCommands.add(command);
               }
->>>>>>> origin/main
             }
             if (result.status === "completed") {
               await this.emit(session, "ToolCompleted", { executionId: execution.id, result });

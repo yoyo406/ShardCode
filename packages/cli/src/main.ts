@@ -19,14 +19,9 @@ import {
 import { AgentRuntime, JsonSessionStore } from "@shardcode/runtime";
 import { FileStorage, ToolRuntime } from "@shardcode/tool-runtime";
 import { parseArgs, HELP_TEXT, type CliOptions, type CliProvider } from "./args.js";
-<<<<<<< HEAD
-import { askForPermission } from "./prompts.js";
-import { renderEvent, sanitizeTerminalText } from "./render.js";
-=======
 import { askForPermission, sanitizePermissionPrompt } from "./prompts.js";
 import { renderEvent, sanitizeTerminalText } from "./render.js";
 import { ProviderStore } from "./provider-store.js";
->>>>>>> origin/main
 import {
   createDefaultTuiTerminal,
   runInteractiveTui,
@@ -120,14 +115,8 @@ function buildProvider(
           content: "I will run the repository checks.",
           toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command: "node --check packages/cli/dist/index.js" } }]
         },
-<<<<<<< HEAD
-        toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command: "node -e \"console.log('scripted check')\"" } }],
-        finishReason: "tool_call",
-        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
-=======
         toolCalls: [{ id: "scripted-check", name: "run_shell", arguments: { command: "node --check packages/cli/dist/index.js" } }],
         finishReason: "tool_call"
->>>>>>> origin/main
       },
       {
         message: {
@@ -186,20 +175,12 @@ function sessionSnapshot(session: Session, provider = session.provider, model = 
   };
 }
 
-<<<<<<< HEAD
-export function renderFinalMessage(content: string): string {
-  return sanitizeTerminalText(content);
-}
-
-async function executeTask(options: TaskCliOptions, io: CliIO): Promise<TaskExecutionResult> {
-=======
 async function executeTask(
   options: TaskCliOptions,
   io: CliIO,
   providerStore: ProviderStore,
   renderOptions?: EventRenderOptions
 ): Promise<TaskExecutionResult> {
->>>>>>> origin/main
   try {
     const workspaceRoot = workspaceRootFor(io);
     const toolRuntime = await ToolRuntime.create({
@@ -207,11 +188,7 @@ async function executeTask(
       mode: options.permissionMode,
       isolatedEnvironment: options.isolatedEnvironment,
       ask: async (request, decision) => io.ask ? io.ask(
-<<<<<<< HEAD
-        sanitizeTerminalText(`${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`),
-=======
         sanitizePermissionPrompt(`${request.toolName}${request.command ? `: ${request.command}` : request.path ? `: ${request.path}` : ""} — ${decision.reason}`),
->>>>>>> origin/main
         request,
         decision
       ) : false
@@ -257,12 +234,6 @@ async function executeTask(
       maxContextCharacters: options.maxContextCharacters,
       onEvent: async (event: ShardCodeEvent) => renderEvent(event, io.write, options.json, renderOptions)
     });
-<<<<<<< HEAD
-    const session = options.command === "run"
-      ? await runtime.run(options.prompt ?? "")
-      : await runtime.resume(options.sessionId ?? "");
-    if (!options.json && session.finalMessage) io.write(renderFinalMessage(session.finalMessage));
-=======
     const onSigint = () => runtime.abort();
     process.once("SIGINT", onSigint);
     let session: Session;
@@ -277,7 +248,6 @@ async function executeTask(
       await providerStore.markVerified(storedConnection.providerId).catch(() => undefined);
     }
     if (session.status === "completed") writeFinalMessage(io, session.finalMessage, options.json);
->>>>>>> origin/main
     return {
       exitCode: session.status === "completed" ? 0 : session.status === "aborted" ? 130 : 1,
       provider: activeProvider,

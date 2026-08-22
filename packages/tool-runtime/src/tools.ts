@@ -70,17 +70,10 @@ export function globToRegExp(pattern: string): RegExp {
         if (pattern[index + 2] === "/") {
           result += "(?:.*/)?";
           index += 2;
-<<<<<<< HEAD
-          continue;
-        }
-        result += ".*";
-        index += 1;
-=======
         } else {
           result += ".*";
           index += 1;
         }
->>>>>>> origin/main
       } else result += "[^/]*";
     } else if (char === "?") result += "[^/]";
     else result += (char ?? "").replace(/[.+^${}()|[\]\\]/g, "\\$&");

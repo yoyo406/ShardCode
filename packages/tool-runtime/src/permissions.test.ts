@@ -73,27 +73,17 @@ describe("permission engine", () => {
     expect(engine.check({ toolName: "write_file", risk: "write", mode: "ask", path: "src/secrets/key.ts" }).level).toBe("deny");
   });
 
-<<<<<<< HEAD
-  it("ignores permission rules with invalid decisions", async () => {
-=======
   it("ignores malformed rule decisions instead of bypassing the default policy", async () => {
->>>>>>> origin/main
     const root = await workspace();
     await mkdir(join(root, ".shardcode"));
     await writeFile(
       join(root, ".shardcode", "settings.json"),
-<<<<<<< HEAD
-      JSON.stringify({ rules: [{ tool: "write_file", decision: "execute" }] })
-=======
       JSON.stringify({ rules: [{ tool: "write_file", path: "src/*", decision: "allow-by-accident" }] })
->>>>>>> origin/main
     );
 
     const engine = await PermissionEngine.create({ workspaceRoot: root, mode: "ask" });
 
     expect(engine.check({ toolName: "write_file", risk: "write", mode: "ask", path: "src/index.ts" }).level).toBe("ask");
-<<<<<<< HEAD
-=======
 
     const directEngine = new PermissionEngine({
       workspaceRoot: root,
@@ -101,6 +91,5 @@ describe("permission engine", () => {
       settings: { rules: [{ tool: "write_file", path: "src/*", decision: "allow-by-accident" } as unknown as PermissionRule] }
     });
     expect(directEngine.check({ toolName: "write_file", risk: "write", mode: "ask", path: "src/index.ts" }).level).toBe("ask");
->>>>>>> origin/main
   });
 });

@@ -2,14 +2,9 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-<<<<<<< HEAD
-import { runCli, type CliIO } from "./main.js";
-import * as mainModule from "./main.js";
-=======
 import { JsonSessionStore } from "@shardcode/runtime";
 import { FileStorage } from "@shardcode/tool-runtime";
 import { runCli, writeFinalMessage, type CliIO } from "./main.js";
->>>>>>> origin/main
 import type { TuiTerminal } from "./tui.js";
 
 function io(overrides: Partial<Pick<CliIO, "cwd" | "env" | "fetch">> = {}): CliIO & { output: string[]; errors: string[] } {

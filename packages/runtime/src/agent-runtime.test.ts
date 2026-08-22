@@ -240,25 +240,6 @@ describe("agent runtime", () => {
     expect(resumed.status).toBe("completed");
   });
 
-<<<<<<< HEAD
-  it("does not trust a completed session without validation proof", async () => {
-    const store = new InMemorySessionStore();
-    const firstRuntime = new AgentRuntime({
-      provider: new ScriptedModel([
-        response("checks", [shellCall("call-1", "pnpm test")]),
-        response("SHARDCODE_VALIDATED: checks passed")
-      ]),
-      tools: new ScriptedTools([toolResult("call-1", "completed", "passed")]),
-      sessionStore: store,
-      workspaceRoot: "/repo",
-      budget: { maxTokens: 100, maxToolCalls: 4, maxWallClockSeconds: 60 }
-    });
-    const forged = await firstRuntime.run("Resume me");
-    delete forged.rootTask.validation;
-    await store.save(forged);
-
-    await expect(firstRuntime.resume(forged.id)).rejects.toThrow("validation proof");
-=======
   it("does not accept an unrelated successful shell command as validation", async () => {
     const model = new ScriptedModel([
       response("Running an unrelated command.", [shellCall("call-1", "echo ok")]),
@@ -282,6 +263,5 @@ describe("agent runtime", () => {
 
     expect(session.status).toBe("completed");
     expect(session.rootTask.validation?.passedCommands).toEqual(["pnpm test"]);
->>>>>>> origin/main
   });
 });

@@ -31,11 +31,7 @@ export async function askForPermission(question: string): Promise<boolean> {
   if (!stdin.isTTY || !stdout.isTTY) return false;
   const terminal = createInterface({ input: stdin, output: stdout });
   try {
-<<<<<<< HEAD
-    const answer = await terminal.question(`${sanitizeTerminalText(question)} [y/N] `);
-=======
     const answer = await terminal.question(`${formatPermissionPrompt(question)} `);
->>>>>>> origin/main
     return ["y", "yes", "o", "oui"].includes(answer.trim().toLowerCase());
   } finally {
     terminal.close();

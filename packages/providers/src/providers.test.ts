@@ -167,50 +167,23 @@ describe("normalized providers", () => {
     await expect(provider.complete(request)).resolves.toEqual(second);
   });
 
-<<<<<<< HEAD
-  it("aborts a provider request after the configured timeout", async () => {
-=======
   it("forwards cancellation to the provider transport", async () => {
     const controller = new AbortController();
     let receivedSignal: AbortSignal | null | undefined;
->>>>>>> origin/main
     const provider = createProvider({
       provider: "openai",
       model: request.model,
       apiKey: "test-key",
-<<<<<<< HEAD
-      timeoutMs: 5,
-      fetch: async (_input, init) => {
-        if (!init?.signal) throw new Error("missing abort signal");
-        return new Promise<Response>((_resolve, reject) => {
-          init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-=======
       fetch: async (_input, init) => {
         receivedSignal = init?.signal;
         return jsonResponse({
           choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }]
->>>>>>> origin/main
         });
       }
     });
 
-<<<<<<< HEAD
-    await expect(provider.complete(request)).rejects.toThrow("timed out");
-  });
-
-  it("rejects oversized provider response bodies", async () => {
-    const provider = createProvider({
-      provider: "openai",
-      model: request.model,
-      apiKey: "test-key",
-      fetch: async () => new Response("x".repeat(4 * 1024 * 1024 + 1), { status: 200 })
-    });
-
-    await expect(provider.complete(request)).rejects.toThrow("response exceeded");
-=======
     await provider.complete({ ...request, signal: controller.signal });
 
     expect(receivedSignal).toBe(controller.signal);
->>>>>>> origin/main
   });
 });
