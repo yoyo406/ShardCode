@@ -9,10 +9,14 @@ describe("interactive slash commands", () => {
     });
   });
 
-  it("normalizes command names and aliases", () => {
+  it("normalizes command names, aliases, and help targets", () => {
     expect(parseInteractiveInput("/HELP model")).toEqual({
       kind: "command",
       command: { name: "help", target: "model" }
+    });
+    expect(parseInteractiveInput("/help quit")).toEqual({
+      kind: "command",
+      command: { name: "help", target: "exit" }
     });
     expect(parseInteractiveInput("/quit")).toEqual({
       kind: "command",
@@ -20,11 +24,32 @@ describe("interactive slash commands", () => {
     });
   });
 
+  it("parses read-only model and permission requests without applying them", () => {
+    expect(parseInteractiveInput("/model alternate")).toEqual({
+      kind: "command",
+      command: { name: "model", model: "alternate" }
+    });
+    expect(parseInteractiveInput("/permissions acceptEdits")).toEqual({
+      kind: "command",
+      command: { name: "permissions", mode: "acceptEdits" }
+    });
+    expect(parseInteractiveInput("/permissions unsafe")).toMatchObject({ kind: "invalid" });
+  });
+
   it("parses a safe resume session id", () => {
     expect(parseInteractiveInput("/resume abc-123")).toEqual({
       kind: "command",
       command: { name: "resume", sessionId: "abc-123" }
     });
+  });
+
+  it("parses /connect as a local provider setup command", () => {
+    expect(parseInteractiveInput("/connect")).toEqual({
+      kind: "command",
+      command: { name: "connect" }
+    });
+    expect(parseInteractiveInput("/connect extra")).toMatchObject({ kind: "invalid" });
+    expect(formatSlashHelp("connect")).toContain("/connect");
   });
 
   it("rejects empty input, unknown commands, bad arguments, and unsafe ids", () => {

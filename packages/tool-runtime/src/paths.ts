@@ -1,5 +1,6 @@
+import { dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
+import { realpathSync } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
-import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 
 export interface WorkspacePath {
   absolute: string;
@@ -8,21 +9,60 @@ export interface WorkspacePath {
   protected: boolean;
 }
 
+const PROTECTED_PATH_NAMES = new Set([".git", "secrets", "secret", "credentials"]);
+
+export function isProtectedPathSegment(value: string): boolean {
+  const name = value.toLowerCase();
+  return (
+    PROTECTED_PATH_NAMES.has(name) ||
+    name === ".env" ||
+    name.startsWith(".env.") ||
+    name.startsWith("secrets.") ||
+    name.startsWith("secret.") ||
+    name.startsWith("credentials.")
+  );
+}
+
 function isProtectedRelativePath(value: string): boolean {
+<<<<<<< HEAD
   const normalized = value.replaceAll("\\", "/").toLowerCase();
   const segments = normalized.split(/[\\/]+/).filter(Boolean);
   const basename = segments.at(-1) ?? "";
   const protectedDirectory = segments.some((segment) =>
     [".git", ".shardcode", "secrets", "secret", "credentials"].includes(segment)
+=======
+  const segments = value.split(/[\\/]+/).filter(Boolean);
+  return (
+    segments.some(isProtectedPathSegment) ||
+    value === ".shardcode/settings.local.json"
+>>>>>>> origin/main
   );
   return protectedDirectory || basename === ".env" || basename.startsWith(".env.");
+}
+
+function existingRealPath(value: string): string {
+  let current = value;
+  while (true) {
+    try {
+      return realpathSync.native(current);
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return resolve(value);
+      current = parent;
+    }
+  }
 }
 
 export function resolveWorkspacePath(workspaceRoot: string, requested: string): WorkspacePath {
   const root = resolve(workspaceRoot);
   const absolute = resolve(root, requested);
   const relativePath = relative(root, absolute).split(sep).join("/");
-  const withinWorkspace = relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+  const physicalRoot = existingRealPath(root);
+  const physicalTarget = existingRealPath(absolute);
+  const physicalRelative = relative(physicalRoot, physicalTarget);
+  const lexicalWithinWorkspace = relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+  const physicalWithinWorkspace = physicalRelative === "" || (!physicalRelative.startsWith("..") && !isAbsolute(physicalRelative));
+  const withinWorkspace = lexicalWithinWorkspace && physicalWithinWorkspace;
   return {
     absolute,
     relative: relativePath,

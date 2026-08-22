@@ -140,6 +140,8 @@ describe("normalized providers", () => {
 
     const response = await provider.complete(request);
 
+    expect(captured?.url).not.toContain("test-key");
+    expect(captured?.headers.get("x-goog-api-key")).toBe("test-key");
     expect(response.message.content).toBe("I will read it.");
     expect(response.toolCalls[0]).toMatchObject({ name: "read_file", arguments: { path: "README.md" } });
     expect(response.usage?.totalTokens).toBe(12);
@@ -165,20 +167,34 @@ describe("normalized providers", () => {
     await expect(provider.complete(request)).resolves.toEqual(second);
   });
 
+<<<<<<< HEAD
   it("aborts a provider request after the configured timeout", async () => {
+=======
+  it("forwards cancellation to the provider transport", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | null | undefined;
+>>>>>>> origin/main
     const provider = createProvider({
       provider: "openai",
       model: request.model,
       apiKey: "test-key",
+<<<<<<< HEAD
       timeoutMs: 5,
       fetch: async (_input, init) => {
         if (!init?.signal) throw new Error("missing abort signal");
         return new Promise<Response>((_resolve, reject) => {
           init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+=======
+      fetch: async (_input, init) => {
+        receivedSignal = init?.signal;
+        return jsonResponse({
+          choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }]
+>>>>>>> origin/main
         });
       }
     });
 
+<<<<<<< HEAD
     await expect(provider.complete(request)).rejects.toThrow("timed out");
   });
 
@@ -191,5 +207,10 @@ describe("normalized providers", () => {
     });
 
     await expect(provider.complete(request)).rejects.toThrow("response exceeded");
+=======
+    await provider.complete({ ...request, signal: controller.signal });
+
+    expect(receivedSignal).toBe(controller.signal);
+>>>>>>> origin/main
   });
 });

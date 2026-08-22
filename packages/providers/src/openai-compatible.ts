@@ -1,7 +1,6 @@
 import type { ModelMessage, ModelProvider, ModelRequest, ModelResponse, ModelToolCall, ProviderConfig } from "@shardcode/shared";
 import {
   asArray,
-  asNumber,
   asRecord,
   asString,
   assistantMessage,
@@ -34,18 +33,26 @@ function messageForOpenAI(message: ModelMessage): Record<string, unknown> {
   return result;
 }
 
-export function createOpenAIProvider(config: ProviderConfig): ModelProvider {
+function defaultEndpoint(config: ProviderConfig): string {
+  if (config.provider === "mistral") return "https://api.mistral.ai/v1/chat/completions";
+  if (config.provider === "cline") return "https://api.cline.bot/api/v1/chat/completions";
+  if (config.provider === "kilo-code") return "https://api.kilo.ai/api/gateway/chat/completions";
+  return "https://api.openai.com/v1/chat/completions";
+}
+
+export function createOpenAICompatibleProvider(config: ProviderConfig): ModelProvider {
   const apiKey = requireApiKey(config);
   const fetcher = getFetch(config);
-  const endpoint = config.baseUrl ?? "https://api.openai.com/v1/chat/completions";
+  const endpoint = config.baseUrl ?? defaultEndpoint(config);
   return {
-    id: "openai",
+    id: config.provider,
     model: config.model,
     async complete(request: ModelRequest): Promise<ModelResponse> {
       const body: Record<string, unknown> = {
         model: request.model,
         messages: request.messages.map(messageForOpenAI),
-        tools: toolDefinitionsForOpenAI(request.tools)
+        tools: toolDefinitionsForOpenAI(request.tools),
+        stream: false
       };
       if (request.maxOutputTokens !== undefined) body.max_tokens = request.maxOutputTokens;
       if (request.temperature !== undefined) body.temperature = request.temperature;
@@ -55,12 +62,9 @@ export function createOpenAIProvider(config: ProviderConfig): ModelProvider {
         {
           method: "POST",
           headers: requestHeaders({ Authorization: `Bearer ${apiKey}` }),
-          body: JSON.stringify(body),
-          ...(request.signal ? { signal: request.signal } : {})
+          body: JSON.stringify(body)
         },
-        "OpenAI",
-        3,
-        config.timeoutMs
+        config.provider
       );
       const choice = asRecord(asArray(payload.choices)[0]);
       const rawMessage = asRecord(choice.message);

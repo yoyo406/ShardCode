@@ -4,16 +4,30 @@ import { HELP_TEXT, parseArgs } from "./args.js";
 describe("CLI arguments", () => {
   it("opens interactive mode when no command is provided", () => {
     expect(parseArgs([])).toMatchObject({ command: "interactive", provider: "openai" });
+    expect(parseArgs(["--provider", "scripted"])).toMatchObject({
+      command: "interactive",
+      provider: "scripted"
+    });
   });
 
-  it("accepts a bare task as a direct run command", () => {
+  it("recognizes short help after options", () => {
+    expect(parseArgs(["--provider", "scripted", "-h"])).toMatchObject({
+      command: "help",
+      provider: "scripted"
+    });
+  });
+
+  it("accepts a bare task while preserving explicit commands", () => {
     expect(parseArgs(["Fix the tests", "--provider", "scripted"])).toMatchObject({
       command: "run",
       prompt: "Fix the tests",
       provider: "scripted"
     });
+    expect(parseArgs(["run", "Fix the tests"])).toMatchObject({ command: "run", prompt: "Fix the tests" });
+    expect(parseArgs(["resume", "session-123"])).toMatchObject({ command: "resume", sessionId: "session-123" });
   });
 
+<<<<<<< HEAD
   it("preserves a bare task when options come first", () => {
     expect(parseArgs(["--provider", "scripted", "Run the checks"])).toMatchObject({
       command: "run",
@@ -23,6 +37,9 @@ describe("CLI arguments", () => {
   });
 
   it("parses a run task and execution controls", () => {
+=======
+  it("parses execution and context controls", () => {
+>>>>>>> origin/main
     expect(parseArgs([
       "run",
       "Implement OAuth",
@@ -34,6 +51,8 @@ describe("CLI arguments", () => {
       "acceptEdits",
       "--max-tool-calls",
       "12",
+      "--max-context-characters",
+      "64000",
       "--json"
     ])).toMatchObject({
       command: "run",
@@ -42,19 +61,47 @@ describe("CLI arguments", () => {
       model: "claude-test",
       permissionMode: "acceptEdits",
       maxToolCalls: 12,
+      maxContextCharacters: 64_000,
       json: true
     });
   });
 
+<<<<<<< HEAD
   it("parses resume and rejects unknown options", () => {
     expect(parseArgs(["resume", "session-123"])).toMatchObject({ command: "resume", sessionId: "session-123" });
     expect(() => parseArgs(["resume", "session-123", "extra"])).toThrow("accepts one session id");
+=======
+  it("requires exactly one resume id and rejects unknown options", () => {
+    expect(() => parseArgs(["resume", "session-123", "extra"])).toThrow("session id");
+>>>>>>> origin/main
     expect(() => parseArgs(["run", "task", "--not-real"])).toThrow("unknown option");
   });
 
-  it("documents interactive and direct launcher usage", () => {
-    expect(HELP_TEXT).toContain("shard \"task description\"");
+  it("accepts every connectable provider from the command line", () => {
+    for (const provider of [
+      "openai",
+      "openai-codex",
+      "google-gemini",
+      "mistral",
+      "anthropic-claude",
+      "opencode-zen",
+      "opencode-go",
+      "cline",
+      "kilo-code"
+    ]) {
+      expect(parseArgs(["run", "task", "--provider", provider])).toMatchObject({ provider, providerExplicit: true });
+    }
+  });
+
+  it("documents interactive, direct, provider, and context usage", () => {
+    expect(HELP_TEXT).toContain("shard [options]");
+    expect(HELP_TEXT).toContain("shardcode [options]");
+    expect(HELP_TEXT).toContain('shardcode "task description" [options]');
     expect(HELP_TEXT).toContain("shardcode run");
     expect(HELP_TEXT).toContain("shardcode resume");
+    expect(HELP_TEXT).toContain("interactive TUI");
+    expect(HELP_TEXT).toContain("openai-codex");
+    expect(HELP_TEXT).toContain("kilo-code");
+    expect(HELP_TEXT).toContain("--max-context-characters");
   });
 });

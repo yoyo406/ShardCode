@@ -51,13 +51,36 @@ function matchingRule(request: PermissionRequest, rule: PermissionRule): boolean
   );
 }
 
+function parseRule(value: unknown): PermissionRule | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.decision !== "allow" && record.decision !== "ask" && record.decision !== "deny") return undefined;
+  for (const key of ["tool", "path", "command", "reason"]) {
+    if (record[key] !== undefined && typeof record[key] !== "string") return undefined;
+  }
+  const rule: PermissionRule = { decision: record.decision };
+  if (typeof record.tool === "string") rule.tool = record.tool;
+  if (typeof record.path === "string") rule.path = record.path;
+  if (typeof record.command === "string") rule.command = record.command;
+  if (typeof record.reason === "string") rule.reason = record.reason;
+  return rule;
+}
+
 async function loadSettings(path: string): Promise<PermissionSettings> {
   try {
     const content = await readFile(path, "utf8");
     const value: unknown = JSON.parse(content);
     if (typeof value !== "object" || value === null) return {};
     const rules = (value as { rules?: unknown }).rules;
+<<<<<<< HEAD
     return Array.isArray(rules) ? { rules: rules.filter(isPermissionRule) } : {};
+=======
+    if (!Array.isArray(rules)) return {};
+    return { rules: rules.flatMap((rule) => {
+      const parsed = parseRule(rule);
+      return parsed ? [parsed] : [];
+    }) };
+>>>>>>> origin/main
   } catch {
     return {};
   }
@@ -72,8 +95,14 @@ export class PermissionEngine {
   constructor(options: PermissionEngineOptions) {
     this.options = options;
     this.workspaceRoot = options.workspaceRoot;
-    this.projectRules = options.settings?.rules ?? [];
-    this.localRules = options.localSettings?.rules ?? [];
+    this.projectRules = options.settings?.rules?.flatMap((rule) => {
+      const parsed = parseRule(rule);
+      return parsed ? [parsed] : [];
+    }) ?? [];
+    this.localRules = options.localSettings?.rules?.flatMap((rule) => {
+      const parsed = parseRule(rule);
+      return parsed ? [parsed] : [];
+    }) ?? [];
   }
 
   static async create(options: PermissionEngineOptions): Promise<PermissionEngine> {

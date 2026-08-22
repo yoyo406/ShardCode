@@ -1,6 +1,6 @@
 # Shard Interactive Slash Commands Design
 
-**Date:** 2026-08-13  
+**Date:** 2026-08-13
 **Status:** Approved by the user
 
 ## Goal

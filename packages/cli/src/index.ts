@@ -2,8 +2,10 @@
 
 export * from "./args.js";
 export * from "./main.js";
+export * from "./provider-store.js";
 export * from "./render.js";
 export * from "./slash.js";
+export * from "./theme.js";
 export * from "./tui.js";
 
 import { runCli } from "./main.js";

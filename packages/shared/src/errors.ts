@@ -6,6 +6,7 @@ export type ErrorCategory =
   | "permission"
   | "budget"
   | "thrashing"
+  | "aborted"
   | "fatal";
 
 export class ShardCodeError extends Error {
@@ -69,5 +70,12 @@ export class ValidationError extends ShardCodeError {
   constructor(message: string) {
     super(message, "validation");
     this.name = "ValidationError";
+  }
+}
+
+export class AgentAbortedError extends ShardCodeError {
+  constructor(message = "agent run aborted", options: { cause?: unknown } = {}) {
+    super(message, "aborted", options);
+    this.name = "AgentAbortedError";
   }
 }

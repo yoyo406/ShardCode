@@ -5,4 +5,7 @@ coverage/
 .shardcode/settings.local.json
 .shardcode/sessions/
 .shardcode/*.jsonl
+**/.shardcode/settings.local.json
+**/.shardcode/sessions/
+**/.shardcode/*.jsonl
 .worktrees/
